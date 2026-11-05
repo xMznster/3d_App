@@ -255,11 +255,13 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) requ
 // Modell anzeigen
 // ---------------------------------------------------------------------------
 const TARGET_SIZE = 2;
+// Originalmaterialien getrennt merken (nicht in userData – das würde beim GLB-Export mitgeschrieben)
+const origMaterials = new WeakMap();
 
 function disposeObject(obj) {
   obj.traverse((o) => {
     if (o.geometry) o.geometry.dispose();
-    const mats = [o.material, o.userData.origMaterial].flat().filter(Boolean);
+    const mats = [o.material, origMaterials.get(o)].flat().filter(Boolean);
     for (const m of mats) {
       for (const v of Object.values(m)) if (v && v.isTexture) v.dispose();
       m.dispose();
@@ -310,14 +312,15 @@ function applyColor() {
   if (!currentModel) return;
   currentModel.traverse((o) => {
     if (!o.isMesh) return;
-    if (!o.userData.origMaterial) o.userData.origMaterial = o.material;
-    if (o.material !== o.userData.origMaterial) {
+    if (!origMaterials.has(o)) origMaterials.set(o, o.material);
+    const orig = origMaterials.get(o);
+    if (o.material !== orig) {
       [o.material].flat().forEach((m) => m.dispose());
     }
     if (!prefs.color) {
-      o.material = o.userData.origMaterial;
+      o.material = orig;
     } else {
-      const src = [o.userData.origMaterial].flat();
+      const src = [orig].flat();
       const mats = src.map((m) => {
         const n = new THREE.MeshStandardMaterial({
           color: prefs.color,
@@ -330,7 +333,7 @@ function applyColor() {
         n.name = m.name;
         return n;
       });
-      o.material = Array.isArray(o.userData.origMaterial) ? mats : mats[0];
+      o.material = Array.isArray(orig) ? mats : mats[0];
     }
   });
   applyWireframe();
@@ -863,7 +866,7 @@ renderSavedList();
 
 const params = new URLSearchParams(location.search);
 const src = params.get('src') || params.get('model');
-loadBuiltin(params.get('demo') || 'rocket');
+loadBuiltin(params.get('demo') || 'spider');
 if (src) openUrl(src);
 if (!prefs.helpSeen) showHelp();
 

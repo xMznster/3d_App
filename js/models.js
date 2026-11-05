@@ -1,6 +1,7 @@
 // Prozedurale Beispielmodelle – werden direkt im Browser erzeugt,
 // benötigen keine Downloads und funktionieren daher auch offline.
 import * as THREE from 'three';
+import { createSpider } from './spider.js';
 
 const mat = (color, opts = {}) =>
   new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.1, ...opts });
@@ -162,6 +163,7 @@ function diamond() {
 }
 
 export const BUILTIN_MODELS = [
+  { id: 'spider', name: 'Wolfsspinne', create: createSpider },
   { id: 'rocket', name: 'Rakete', create: rocket },
   { id: 'knot', name: 'Torusknoten', create: torusKnot },
   { id: 'house', name: 'Haus', create: house },
