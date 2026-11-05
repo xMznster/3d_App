@@ -1,6 +1,6 @@
 // Service Worker: macht 3D Studio offline-fähig (App-Shell wird zwischengespeichert).
 // Bei jeder Änderung an App-Dateien VERSION erhöhen.
-const VERSION = 'v1.3.0';
+const VERSION = 'v1.4.0';
 const CACHE = `3d-studio-${VERSION}`;
 const ASSETS = [
   './',
@@ -14,6 +14,7 @@ const ASSETS = [
   './js/rig-registry.js',
   './js/rigkit.js',
   './js/characters.js',
+  './js/ghost.js',
   './js/storage.js',
   './icons/apple-touch-icon.png',
   './icons/icon-192.png',

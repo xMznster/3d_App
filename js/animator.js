@@ -290,10 +290,16 @@ function analyzeHumanoid(root, rig) {
   }));
   const [Ls, Rs] = sides;
   const tendrils = (rig.tendrils || []).map((t) => ({ ...t, j: t.bones.map(joint) }));
+  const hair = (rig.hair || []).map((h) => ({ ...h, j: h.bones.map(joint) }));
+  const skirt = (rig.skirt || []).map((h) => ({ ...h, j: h.bones.map(joint) }));
+  const fingers = rig.fingers ? [1, -1].map((s) => ({ s, list: rig.fingers[s > 0 ? 'L' : 'R'].map((f) => ({ ...f, pj: joint(f.prox), dj: joint(f.dist) })) })) : [];
   const nodes = [
     ...Object.values(J).map((j) => j.node),
     ...sides.flatMap((x) => [x.upper, x.fore, x.hand, x.up, x.low, x.foot].map((j) => j.node)),
     ...tendrils.flatMap((t) => t.bones),
+    ...hair.flatMap((h) => h.bones),
+    ...skirt.flatMap((h) => h.bones),
+    ...fingers.flatMap((f) => f.list.flatMap((x) => [x.prox, x.dist])),
   ];
   ensureNames(root, nodes);
   const restore = snapshot(nodes);
@@ -314,8 +320,75 @@ function analyzeHumanoid(root, rig) {
     human: { T: 1.1, A: 0.42, arm: 0.35, bob: 0.022, lean: 0.04, q: 0 },
     animatronic: { T: 1.4, A: 0.3, arm: 0.14, bob: 0.03, lean: 0.03, q: 18 },
     shadow: { T: 1.8, A: 0.34, arm: 0.05, bob: 0.012, lean: 0.1, q: 0 },
+    ghost: { T: 2.3, A: 0.24, arm: 0.06, bob: 0.014, lean: 0.22, q: 0 },
   }[flavor] || { T: 1.1, A: 0.42, arm: 0.35, bob: 0.022, lean: 0.04, q: 0 };
-  const walk = bakeClip('Laufen', F.T, tracks, restore, (t) => {
+  // --- Geisterfrau: Hilfen für Haare, Kleid, Finger und gebeugte Haltung ---
+  const hairSway = (t, amp, speed, bias = 0) => hair.forEach((h, k) => h.j.forEach((j, i) => {
+    const a = amp * (0.5 + i * 0.35);
+    rot(j, XAXIS, bias * (0.6 + i * 0.3) + a * Math.sin(TAU * speed * t - i * 0.7 + k * 0.9));
+    rot(j, ZAXIS, a * 0.6 * Math.sin(TAU * speed * 0.8 * t - i * 0.5 + k * 1.7));
+  }));
+  const skirtSway = (t, amp, speed, flare = 0) => skirt.forEach((sk, k) => sk.j.forEach((j, i) => {
+    rot(j, sk.swing, flare * (i ? 0.6 : 1) + amp * (i ? 1.4 : 1) * Math.sin(TAU * speed * t - i * 0.9 + k * 0.8));
+  }));
+  const curl = (side, c, spread = 0, twitch = null) => {
+    const F2 = fingers.find((f) => f.s === side);
+    if (!F2) return;
+    for (const f of F2.list) {
+      const tw = twitch ? twitch(f.i) : 0;
+      const k = f.thumb ? 0.5 : 1;
+      rot(f.pj, ZAXIS, -side * (c + tw) * 0.55 * k);
+      rot(f.dj, ZAXIS, -side * (c + tw) * 0.75 * k);
+      if (!f.thumb) rot(f.pj, XAXIS, (f.i - 1.5) * spread);
+    }
+  };
+  // Schwerkraft: Haarketten hängen trotz Kopfbewegung überwiegend nach unten (vor hairSway aufrufen)
+  const hairRestQ = hair.map((h) => h.bones[0].getWorldQuaternion(new THREE.Quaternion()));
+  const _pq = new THREE.Quaternion(), _wq = new THREE.Quaternion();
+  const gravity = (k = 0.75) => {
+    if (!hair.length) return;
+    rig.root.updateMatrixWorld(true);
+    hair.forEach((h, i) => {
+      const b = h.bones[0];
+      b.parent.getWorldQuaternion(_pq);
+      _wq.copy(_pq).multiply(b.quaternion).slerp(hairRestQ[i], k);
+      b.quaternion.copy(_pq.invert().multiply(_wq));
+    });
+  };
+  const hunch = (e) => {
+    rot(J.spine, XAXIS, 0.16 * e);
+    rot(J.chest, XAXIS, 0.14 * e);
+    rot(J.neck, XAXIS, 0.2 * e);
+    rot(J.head, XAXIS, -0.12 * e);
+    for (const x of sides) { rot(x.upper, XAXIS, -0.12 * e); rot(x.upper, ZAXIS, x.s * 0.07 * e); rot(x.fore, XAXIS, -0.12 * e); }
+  };
+
+  const walk = flavor === 'ghost' ? bakeClip('Laufen', F.T, tracks, restore, (t) => {
+    // langsames, schleppendes Schlurfen; das rechte Bein zieht nach, der Kopf ruckt
+    const g = t / F.T;
+    hunch(1);
+    for (const x of sides) {
+      const drag = x.s < 0;
+      const { fwd, lift } = stepCurve(frac(g + x.ph), 0.62);
+      rot(x.up, XAXIS, -(drag ? 0.7 : 1) * F.A * fwd - 0.05);
+      rot(x.low, XAXIS, 0.1 + (drag ? 0.35 : 0.85) * lift);
+      rot(x.foot, XAXIS, drag ? 0.15 * lift : -0.25 * lift);
+      // Arme baumeln träge hinterher
+      rot(x.upper, XAXIS, 0.12 * Math.sin(TAU * g + (x.s > 0 ? Math.PI : 0) - 0.9));
+      rot(x.fore, XAXIS, -0.06 - 0.08 * Math.max(0, Math.sin(TAU * g + (x.s > 0 ? Math.PI : 0) - 1.4)));
+      curl(x.s, 0.18, 0.06);
+    }
+    rig.hips.position.y = hipsRest.y + F.bob * Math.cos(2 * TAU * g) - 0.02;
+    rot(J.hips, ZAXIS, 0.05 * Math.sin(TAU * g));
+    rot(J.hips, UP, 0.06 * Math.sin(TAU * g));
+    rot(J.chest, ZAXIS, -0.06 * Math.sin(TAU * g));
+    const jerk = Math.exp(-Math.pow((g - 0.55) * 18, 2));
+    rot(J.head, ZAXIS, 0.22 + 0.25 * jerk);
+    rot(J.head, UP, 0.12 * jerk);
+    rot(J.jaw, XAXIS, 0.05 + 0.04 * Math.sin(TAU * 2 * g));
+    gravity(); hairSway(t, 0.035, 2 / F.T, 0.05);
+    skirtSway(t, 0.05, 2 / F.T);
+  }) : bakeClip('Laufen', F.T, tracks, restore, (t) => {
     let g = t / F.T;
     if (F.q) g = Math.floor(g * F.q) / F.q; // ruckartig wie eine alte Maschine
     for (const x of sides) {
@@ -337,7 +410,27 @@ function analyzeHumanoid(root, rig) {
   });
 
   // --- Idle ---
-  const idle = bakeClip('Idle', 4, tracks, restore, (t) => {
+  const idle = flavor === 'ghost' ? bakeClip('Idle', 5, tracks, restore, (t) => {
+    // gebeugt, schweres Atmen, Finger zucken, ruckartige Kopfbewegungen
+    const w = TAU / 5;
+    hunch(1);
+    rot(J.chest, XAXIS, -0.035 * Math.sin(2 * w * t));
+    rot(J.spine, XAXIS, 0.015 * Math.sin(2 * w * t));
+    rig.hips.position.x = hipsRest.x + 0.008 * Math.sin(w * t);
+    rot(J.hips, ZAXIS, 0.02 * Math.sin(w * t));
+    const j1 = key(t, [[0, 0], [1.5, 0], [1.58, 1], [2.6, 1], [2.75, 0], [5, 0]]);
+    const j2 = key(t, [[0, 0], [3.6, 0], [3.66, 1], [4.2, 1], [4.6, 0], [5, 0]]);
+    rot(J.head, ZAXIS, 0.18 + 0.05 * Math.sin(w * t) + 0.32 * j1 - 0.1 * j2);
+    rot(J.head, UP, -0.1 * j1 + 0.22 * j2);
+    rot(J.neck, XAXIS, 0.06 * j2);
+    rot(J.jaw, XAXIS, 0.04 + 0.04 * Math.sin(2 * w * t));
+    for (const x of sides) {
+      rot(x.upper, ZAXIS, x.s * 0.012 * Math.sin(2 * w * t));
+      curl(x.s, 0.15, 0.08, (i) => 0.25 * Math.max(0, Math.sin(TAU * 0.9 * t + i * 1.3 + x.s)) * (i === 1 || i === 3 ? 1 : 0.4));
+    }
+    gravity(); hairSway(t, 0.02, 0.4);
+    skirtSway(t, 0.025, 0.4);
+  }) : bakeClip('Idle', 4, tracks, restore, (t) => {
     const w = TAU / 4;
     rot(J.chest, XAXIS, -0.02 * Math.sin(2 * w * t));
     rig.hips.position.x = hipsRest.x + 0.01 * Math.sin(w * t);
@@ -464,7 +557,83 @@ function analyzeHumanoid(root, rig) {
     });
   }
 
-  const names = { human: 'Menschen-Skelett', animatronic: 'Animatronik-Skelett', shadow: 'Schattenfigur-Skelett' };
+  if (flavor === 'ghost') {
+    action('attack', 'Angriff', 2.4, (t) => {
+      // ausholen → Doppelschlag mit beiden Krallen nach vorne → zweiter Hieb → zurück
+      const back = key(t, [[0, 0], [0.45, 1], [0.62, 0], [2.4, 0]]);
+      const strike = key(t, [[0, 0], [0.45, 0], [0.62, 1], [0.82, 0.75], [1.0, 1.08], [1.5, 1], [2.4, 0]]);
+      const hold = key(t, [[0, 0], [0.5, 1], [1.7, 1], [2.4, 0]]);
+      hunch(1 - 0.6 * back);
+      rig.root.position.z = rootRest.z - 0.06 * back + 0.42 * strike;
+      rig.hips.position.y = hipsRest.y - 0.07 * strike - 0.02 * back;
+      rot(J.spine, XAXIS, -0.22 * back + 0.42 * strike);
+      rot(J.chest, XAXIS, -0.12 * back + 0.2 * strike);
+      rot(J.neck, XAXIS, 0.1 * strike);
+      rot(J.head, XAXIS, -0.35 * back - 0.4 * strike);
+      rot(J.head, ZAXIS, 0.1 * (1 - hold));
+      rot(J.jaw, XAXIS, 0.55 * back + 0.85 * strike);
+      const e2 = key(t, [[0, 0], [0.82, 0], [1.0, 1], [1.5, 1], [2.0, 0]]);
+      for (const x of sides) {
+        // Ausholen: Arme hoch über den Kopf, Schlag: nach vorne unten
+        rot(x.upper, XAXIS, -2.5 * back - 1.25 * strike + (x.s > 0 ? 0.25 : -0.15) * e2);
+        rot(x.upper, ZAXIS, x.s * (0.35 * back + 0.12 * strike));
+        rot(x.fore, XAXIS, -0.7 * back - 0.25 * strike);
+        rot(x.hand, XAXIS, 0.3 * back - 0.35 * strike);
+        curl(x.s, -0.35 * back + 0.95 * strike, 0.22 * back + 0.08 * strike);
+      }
+      // Ausfallschritt: linkes Bein vor, rechtes zurück
+      rot(Ls.up, XAXIS, -0.65 * strike + 0.1 * back);
+      rot(Ls.low, XAXIS, 0.55 * strike);
+      rot(Ls.foot, XAXIS, 0.1 * strike);
+      rot(Rs.up, XAXIS, 0.38 * strike);
+      rot(Rs.low, XAXIS, 0.25 * strike);
+      rot(Rs.foot, XAXIS, 0.25 * strike);
+      // Haare und Kleid schwingen träge nach
+      const vel = key(t, [[0, 0], [0.45, -0.6], [0.62, 1], [0.9, -0.3], [1.1, 0.5], [1.6, 0], [2.4, 0]]);
+      gravity(0.6); hairSway(t, 0.03, 1.2, -0.25 * vel);
+      skirtSway(t, 0.05 * hold, 1.6, 0.12 * Math.abs(vel));
+    });
+    action('scream', 'Schrei', 2.6, (t) => {
+      const e = key(t, [[0, 0], [0.5, 1], [2.0, 1], [2.6, 0]]);
+      const pre = key(t, [[0, 0], [0.3, 1], [0.6, 0], [2.6, 0]]);
+      const shake = e * Math.sin(TAU * 11 * t);
+      hunch(1 - e * 0.8);
+      rot(J.spine, XAXIS, 0.25 * pre - 0.18 * e);
+      rot(J.chest, XAXIS, -0.12 * e + 0.015 * shake);
+      rot(J.head, XAXIS, 0.25 * pre - 0.42 * e + 0.03 * shake);
+      rot(J.head, ZAXIS, 0.04 * shake);
+      rot(J.jaw, XAXIS, 0.95 * e + 0.05 * shake);
+      for (const x of sides) {
+        rot(x.upper, ZAXIS, x.s * 0.7 * e);
+        rot(x.upper, XAXIS, 0.35 * e);
+        rot(x.fore, XAXIS, -0.45 * e);
+        rot(x.fore, ZAXIS, x.s * 0.25 * e);
+        curl(x.s, -0.3 * e + 0.15 * pre, 0.28 * e, (i) => 0.08 * shake * (i % 2 ? 1 : -1));
+      }
+      gravity(0.6); hairSway(t, 0.04 * e, 1.6, -0.2 * e);
+      skirtSway(t, 0.04 * e, 2.4, 0.08 * e);
+    });
+    action('twist', 'Kopf verdrehen', 3.2, (t) => {
+      // ruckartig, in Stufen verdreht und zurückgeschnappt
+      const e = key(t, [[0, 0], [0.3, 1], [2.7, 1], [3.2, 0]]);
+      const seg = Math.floor(t * 6);
+      const r = (k) => hash(seg * 5 + k);
+      const steps = key(t, [[0, 0], [0.4, 0.35], [0.45, 0.35], [0.9, 0.7], [1.0, 0.7], [1.6, 1], [2.3, 1], [2.45, 0], [3.2, 0]]);
+      hunch(1);
+      rot(J.neck, ZAXIS, 0.45 * steps);
+      rot(J.head, ZAXIS, 0.75 * steps + e * (r(1) > 0.6 ? (r(2) - 0.5) * 0.15 : 0));
+      rot(J.head, UP, 0.35 * steps);
+      rot(J.jaw, XAXIS, 0.1 + 0.35 * steps);
+      rot(Rs.upper, ZAXIS, -e * (r(3) > 0.55 ? 0.15 : 0));
+      rot(Ls.upper, XAXIS, -e * (r(4) > 0.6 ? 0.18 : 0));
+      rot(J.chest, ZAXIS, -0.1 * steps);
+      for (const x of sides) curl(x.s, 0.2, 0.1, (i) => e * (hash(seg * 3 + i + x.s * 7) > 0.5 ? 0.35 : 0));
+      gravity(0.8); hairSway(t, 0.02, 0.6, 0);
+      skirtSway(t, 0.02, 0.6);
+    });
+  }
+
+  const names = { human: 'Menschen-Skelett', animatronic: 'Animatronik-Skelett', shadow: 'Schattenfigur-Skelett', ghost: 'Geister-Skelett' };
   return { ok: true, method: names[flavor] || 'Humanoides Skelett', legs: 2, gait: 'Zweibeiner', clips, restore };
 }
 

@@ -100,6 +100,7 @@ for (const [id, method, acts] of [
   ['human', 'Menschen-Skelett', ['wave', 'jump', 'dance']],
   ['bear', 'Animatronik-Skelett', ['scare', 'glitch', 'dance']],
   ['tall', 'Schattenfigur-Skelett', ['appear', 'tendrils', 'stare']],
+  ['ghost', 'Geister-Skelett', ['attack', 'scream', 'twist']],
 ]) {
   console.log(`\n▶ Figur ${id}`);
   await page.evaluate((id) => window.__studio.loadBuiltin(id), id);
