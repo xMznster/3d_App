@@ -150,6 +150,9 @@ document.addEventListener('touchmove', (e) => {
 // Kamera-Animation
 let camAnim = null;
 function animateCamera(toPos, toTarget, ms = 450) {
+  // Restschwung (Dämpfung) der letzten Geste verwerfen, sonst driftet die Kamera weiter
+  controls.enableDamping = false;
+  controls.update();
   camAnim = {
     t0: performance.now(), ms,
     fromPos: camera.position.clone(), fromTarget: controls.target.clone(),
@@ -209,7 +212,7 @@ function loop(now) {
     const e = 1 - Math.pow(1 - k, 3);
     camera.position.lerpVectors(camAnim.fromPos, camAnim.toPos, e);
     controls.target.lerpVectors(camAnim.fromTarget, camAnim.toTarget, e);
-    if (k >= 1) camAnim = null;
+    if (k >= 1) { camAnim = null; controls.enableDamping = true; }
     needsRender = true;
   }
 

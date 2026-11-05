@@ -318,7 +318,9 @@ input[type="url"] {
 .card h2 { margin: 0 0 12px; }
 .gestures { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .gestures li { display: flex; gap: 10px; align-items: center; padding: 10px; border-radius: 14px; background: rgba(255,255,255,.06); font-size: 14px; }
-.gestures .g { font-size: 26px; flex: none; }
+.gestures li { min-width: 0; }
+.gestures li > div { min-width: 0; overflow-wrap: anywhere; hyphens: auto; -webkit-hyphens: auto; }
+.gestures .g { font-size: 24px; width: 30px; text-align: center; flex: none; }
 .install { margin-top: 14px; padding: 12px; border-radius: 14px; background: rgba(62,142,247,.12); font-size: 14px; }
 .share-ico svg { width: 18px; height: 18px; vertical-align: -3px; color: var(--accent-2); }
 

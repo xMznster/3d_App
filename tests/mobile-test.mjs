@@ -183,6 +183,7 @@ for (const prof of PROFILES) {
   for (const [panel, name] of [['panel-models', 'modelle'], ['panel-import', 'oeffnen'], ['panel-view', 'ansicht'], ['panel-export', 'sichern']]) {
     await page.tap(`.tool[data-panel="${panel}"]`);
     await page.waitForTimeout(450);
+    await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
     check(await page.isVisible(`#${panel}`), `${panel} öffnet nicht`);
     ov = await overflowReport(page);
     check(ov.bad.length === 0, `${panel}: außerhalb: ${ov.bad.join(' | ')}`);
