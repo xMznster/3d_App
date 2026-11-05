@@ -48,6 +48,7 @@ await page.evaluate(() => {
       const v = new (window.__studio.camera.position.constructor)();
       window.__studio.model.traverse((o) => {
         if (!o.isMesh) return;
+        if (o.isSkinnedMesh) o.skeleton.update(); // Knochenmatrizen sonst erst beim nächsten Rendern aktuell
         const p = o.geometry.attributes.position;
         const step = Math.max(1, Math.floor(p.count / 400));
         for (let i = 0; i < p.count; i += step) {
@@ -65,6 +66,8 @@ const motion = async (mode, ms = 700) => {
   const a = await page.evaluate(() => window.__t.snapshot());
   await page.evaluate((m) => window.__studio.playAnimation(m), mode);
   await page.waitForTimeout(ms);
+  // im Software-Renderer kann der erste Frame (Shader übersetzen) länger dauern → warten, bis die Animation läuft
+  await page.waitForFunction(() => { const a = window.__studio.anim.action; return !a || a.time > 0.15; }, null, { timeout: 30000 }).catch(() => {});
   await page.evaluate(() => window.__studio.model.updateMatrixWorld(true));
   const b = await page.evaluate(() => window.__t.snapshot());
   let d = 0; for (let i = 0; i < a.length; i++) d = Math.max(d, Math.abs(a[i] - b[i]));
