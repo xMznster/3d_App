@@ -386,77 +386,116 @@ function autoRig(root, onReplaceMesh) {
   const invq = mesh.getWorldQuaternion(new THREE.Quaternion()).invert();
   const upL = UP.clone().applyQuaternion(invq).normalize();
 
-  // Punkte verschweißen (STL hat getrennte Dreiecke)
-  const bb = geo.boundingBox || (geo.computeBoundingBox(), geo.boundingBox);
-  const eps = Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z) * 1e-5 || 1e-6;
-  const weld = new Int32Array(n);
-  const map = new Map();
-  let m = 0;
-  for (let i = 0; i < n; i++) {
-    const k = `${Math.round(pos.getX(i) / eps)},${Math.round(pos.getY(i) / eps)},${Math.round(pos.getZ(i) / eps)}`;
-    let id = map.get(k);
-    if (id === undefined) { id = m++; map.set(k, id); }
-    weld[i] = id;
-  }
-  const wpos = new Float32Array(m * 3), h = new Float32Array(m);
+  // Koordinaten im "Hochachsen"-System: a, b horizontal, h = Höhe
+  const e1 = Math.abs(upL.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
+  e1.addScaledVector(upL, -e1.dot(upL)).normalize();
+  const e2 = new THREE.Vector3().crossVectors(upL, e1);
+  const A = new Float32Array(n), h = new Float32Array(n), Bc = new Float32Array(n);
   const v = new THREE.Vector3();
+  let minA = Infinity, maxA = -Infinity, minH = Infinity, maxH = -Infinity, minB = Infinity, maxB = -Infinity;
   for (let i = 0; i < n; i++) {
     v.fromBufferAttribute(pos, i);
-    const id = weld[i];
-    wpos[id * 3] = v.x; wpos[id * 3 + 1] = v.y; wpos[id * 3 + 2] = v.z;
-    h[id] = v.dot(upL);
+    A[i] = v.dot(e1); h[i] = v.dot(upL); Bc[i] = v.dot(e2);
+    if (A[i] < minA) minA = A[i]; if (A[i] > maxA) maxA = A[i];
+    if (h[i] < minH) minH = h[i]; if (h[i] > maxH) maxH = h[i];
+    if (Bc[i] < minB) minB = Bc[i]; if (Bc[i] > maxB) maxB = Bc[i];
   }
-  let minH = Infinity, maxH = -Infinity;
-  for (let i = 0; i < m; i++) { if (h[i] < minH) minH = h[i]; if (h[i] > maxH) maxH = h[i]; }
   const HL = maxH - minH;
   if (!(HL > 0)) return null;
 
-  // Kanten
+  // Oberfläche in ein Voxelgitter rastern. Räumliche Nähe statt Mesh-Topologie: so werden auch
+  // Beine erkannt, die nur im Körper stecken (häufig bei STL-Dateien aus Tinkercad & Co.)
+  let c = HL / 48;
+  const dims = () => [Math.floor((maxA - minA) / c) + 1, Math.floor(HL / c) + 1, Math.floor((maxB - minB) / c) + 1];
+  let [nx, ny, nz] = dims();
+  while (nx * ny * nz > 6e6) { c *= 1.25; [nx, ny, nz] = dims(); }
+  const N = nx * ny * nz;
+  const occ = new Uint8Array(N);
+  const cell = (a, hh, b) => {
+    const ix = Math.min(nx - 1, Math.max(0, Math.floor((a - minA) / c)));
+    const iy = Math.min(ny - 1, Math.max(0, Math.floor((hh - minH) / c)));
+    const iz = Math.min(nz - 1, Math.max(0, Math.floor((b - minB) / c)));
+    return (iy * nz + iz) * nx + ix;
+  };
   const idx = geo.index ? geo.index.array : null;
   const triCount = idx ? idx.length / 3 : n / 3;
-  const edges = new Int32Array(triCount * 6);
   for (let t = 0; t < triCount; t++) {
-    const a = weld[idx ? idx[t * 3] : t * 3], b = weld[idx ? idx[t * 3 + 1] : t * 3 + 1], c = weld[idx ? idx[t * 3 + 2] : t * 3 + 2];
-    edges.set([a, b, b, c, c, a], t * 6);
-  }
-  // Union-Find
-  const parent = new Int32Array(m);
-  const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
-  const components = (inside) => {
-    for (let i = 0; i < m; i++) parent[i] = i;
-    for (let e = 0; e < edges.length; e += 2) {
-      const a = edges[e], b = edges[e + 1];
-      if (inside(a) && inside(b)) { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; }
+    const i0 = idx ? idx[t * 3] : t * 3, i1 = idx ? idx[t * 3 + 1] : t * 3 + 1, i2 = idx ? idx[t * 3 + 2] : t * 3 + 2;
+    const e = Math.max(
+      Math.hypot(A[i1] - A[i0], h[i1] - h[i0], Bc[i1] - Bc[i0]),
+      Math.hypot(A[i2] - A[i1], h[i2] - h[i1], Bc[i2] - Bc[i1]),
+      Math.hypot(A[i0] - A[i2], h[i0] - h[i2], Bc[i0] - Bc[i2]));
+    const k = Math.min(96, Math.max(1, Math.ceil(e / (0.5 * c))));
+    for (let u = 0; u <= k; u++) {
+      for (let w = 0; w <= k - u; w++) {
+        const l1 = u / k, l2 = w / k, l0 = 1 - l1 - l2;
+        occ[cell(A[i0] * l0 + A[i1] * l1 + A[i2] * l2, h[i0] * l0 + h[i1] * l1 + h[i2] * l2, Bc[i0] * l0 + Bc[i1] * l1 + Bc[i2] * l2)] = 1;
+      }
     }
-    const size = new Map();
-    for (let i = 0; i < m; i++) if (inside(i)) { const r = find(i); size.set(r, (size.get(r) || 0) + 1); }
-    const maxSize = Math.max(0, ...size.values());
-    return [...size.entries()].filter(([, s]) => s >= Math.max(3, 0.04 * maxSize)).map(([r]) => r);
+  }
+
+  // Zusammenhängende Voxel-Bereiche innerhalb eines Höhenbands (26er-Nachbarschaft)
+  const lab = new Int32Array(N);
+  const stack = new Int32Array(N);
+  const components = (y0, y1) => {
+    lab.fill(-1);
+    const comps = [];
+    for (let y = y0; y <= y1; y++) {
+      for (let zz = 0; zz < nz; zz++) {
+        for (let xx = 0; xx < nx; xx++) {
+          const s0 = (y * nz + zz) * nx + xx;
+          if (!occ[s0] || lab[s0] !== -1) continue;
+          const id = comps.length;
+          let sp = 0, size = 0;
+          stack[sp++] = s0; lab[s0] = id;
+          while (sp) {
+            const q = stack[--sp]; size++;
+            const qx = q % nx, qz = Math.floor(q / nx) % nz, qy = Math.floor(q / (nx * nz));
+            for (let dy = -1; dy <= 1; dy++) {
+              const yy = qy + dy; if (yy < y0 || yy > y1) continue;
+              for (let dz = -1; dz <= 1; dz++) {
+                const z2 = qz + dz; if (z2 < 0 || z2 >= nz) continue;
+                for (let dx = -1; dx <= 1; dx++) {
+                  const x2 = qx + dx; if (x2 < 0 || x2 >= nx) continue;
+                  const r = (yy * nz + z2) * nx + x2;
+                  if (occ[r] && lab[r] === -1) { lab[r] = id; stack[sp++] = r; }
+                }
+              }
+            }
+          }
+          comps.push({ id, seed: s0, size });
+        }
+      }
+    }
+    const maxSize = Math.max(0, ...comps.map((q) => q.size));
+    return comps.filter((q) => q.size >= Math.max(2, 0.04 * maxSize));
   };
 
   // Füße: getrennte Bereiche ganz unten
-  const footTop = minH + 0.04 * HL;
-  const feet = components((i) => h[i] <= footTop);
+  const footLayers = Math.max(1, Math.round(0.04 * HL / c));
+  const feet = components(0, footLayers);
   if (feet.length < 2 || feet.length > 8) return null;
   // Hüfthöhe: ab wo laufen die Beine im Querschnitt zusammen?
-  let hipH = null;
-  for (let j = 1; j <= 34; j++) {
-    const lo = minH + j * 0.025 * HL, hi = lo + 0.03 * HL;
-    if (components((i) => h[i] >= lo && h[i] <= hi).length < feet.length) { hipH = lo; break; }
+  let hipLayer = null;
+  for (let y = footLayers; y < Math.floor(0.85 * ny); y++) {
+    if (components(y, y + 1).length < feet.length) { hipLayer = y; break; }
   }
-  if (hipH === null || hipH < minH + 0.08 * HL) return null;
+  if (hipLayer === null || hipLayer * c < 0.08 * HL) return null;
+  const hipH = minH + hipLayer * c;
 
   // Beinbereiche = alles unterhalb der Hüfte, was mit einem Fuß verbunden ist
-  const footRep = components((i) => h[i] <= footTop); // parent[] gehört jetzt wieder zu den Fuß-Komponenten
-  const footMember = new Int32Array(m).fill(-1);
-  for (let i = 0; i < m; i++) if (h[i] <= footTop) { const r = find(i); const k = footRep.indexOf(r); if (k >= 0) footMember[i] = k; }
-  components((i) => h[i] < hipH);
-  const legOfRoot = new Map();
-  for (let i = 0; i < m; i++) if (footMember[i] >= 0) { const r = find(i); if (!legOfRoot.has(r)) legOfRoot.set(r, legOfRoot.size); }
-  const legCount = legOfRoot.size;
+  components(0, hipLayer - 1);
+  const legOfComp = new Map();
+  for (const f of feet) { const id = lab[f.seed]; if (id >= 0 && !legOfComp.has(id)) legOfComp.set(id, legOfComp.size); }
+  const legCount = legOfComp.size;
   if (legCount < 2 || legCount > 8) return null;
-  const legOf = new Int32Array(m).fill(-1);
-  for (let i = 0; i < m; i++) if (h[i] < hipH) { const r = find(i); const k = legOfRoot.get(r); if (k !== undefined) legOf[i] = k; }
+  const legOf = new Int32Array(n).fill(-1);
+  for (let i = 0; i < n; i++) {
+    if (h[i] >= hipH) continue;
+    const k = legOfComp.get(lab[cell(A[i], h[i], Bc[i])]);
+    if (k !== undefined) legOf[i] = k;
+  }
+  const bb = geo.boundingBox || (geo.computeBoundingBox(), geo.boundingBox);
 
   // Gelenkpunkte je Bein (Mittelwerte von Querschnitten)
   const legH = hipH - minH;
@@ -465,8 +504,8 @@ function autoRig(root, onReplaceMesh) {
   const hipAcc = [], kneeAcc = [], footAcc = [];
   for (let k = 0; k < legCount; k++) { hipAcc.push(acc()); kneeAcc.push(acc()); footAcc.push(acc()); }
   const bodyAcc = acc();
-  for (let i = 0; i < m; i++) {
-    v.set(wpos[i * 3], wpos[i * 3 + 1], wpos[i * 3 + 2]);
+  for (let i = 0; i < n; i++) {
+    v.fromBufferAttribute(pos, i);
     const k = legOf[i];
     if (k < 0) { bodyAcc.s.add(v); bodyAcc.c++; continue; }
     if (h[i] > hipH - 0.08 * legH) { hipAcc[k].s.add(v); hipAcc[k].c++; }
@@ -499,7 +538,7 @@ function autoRig(root, onReplaceMesh) {
   const skinIndex = new Uint16Array(n * 4), skinWeight = new Float32Array(n * 4);
   const bw = 0.12 * legH;
   for (let i = 0; i < n; i++) {
-    const id = weld[i], k = legOf[id], hv = h[id];
+    const k = legOf[i], hv = h[i];
     if (k < 0) { skinIndex[i * 4] = 0; skinWeight[i * 4] = 1; continue; }
     const hipI = 1 + k * 2, kneeI = hipI + 1;
     let wHip, wKnee;
