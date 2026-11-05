@@ -41,6 +41,7 @@ Alles läuft auf dem Gerät, ohne Internet:
 | Modelltyp | Vorgehen |
 |---|---|
 | Wolfsspinne | eigenes Skelett, artgerechter Wechselgang (L1-R2-L3-R4 / R1-L2-R3-L4), Atmen, tastende Vorderbeine |
+| Die Bleiche (Geisterfrau) | humanoides Skelett mit Kiefer-, Finger-, Haar- und Kleidknochen (95 Knochen): Idle, schleppendes Laufen, **Angriff** (Ausholen + Krallen-Doppelhieb), Schrei, Kopf verdrehen |
 | GLB/GLTF mit Skelett (z. B. Mixamo, Blender) | Beinketten werden am Knochenbaum erkannt, Arme schwingen mit |
 | Modell aus Einzelteilen | beinartige Teile (lang, rundlich, berühren den Boden) bekommen ein Hüftgelenk |
 | Einteiliges Mesh (STL/OBJ) | Füße, Hüfthöhe und Beine werden per Voxel-Analyse bestimmt, ein Skelett mit Hüfte und Knie wird eingebaut |
