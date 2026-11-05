@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { BUILTIN_MODELS } from './models.js';
 import * as store from './storage.js';
+import { analyzeModel } from './animator.js';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -218,6 +219,11 @@ function loop(now) {
     needsRender = true;
   }
 
+  if (anim.mixer && anim.mode !== 'off') {
+    anim.mixer.update(Math.min(dt, 0.1));
+    needsRender = true;
+  }
+
   const changed = controls.update(dt);
   if (!changed && !needsRender) { lastFrame = 0; return; }
   needsRender = false;
@@ -273,6 +279,7 @@ function showModel(object, meta) {
   const box = new THREE.Box3().setFromObject(object);
   if (box.isEmpty() || !isFinite(box.min.x)) throw new Error('Das Modell enthält keine sichtbare Geometrie.');
 
+  resetAnimation();
   if (currentModel) {
     displayGroup.remove(currentModel);
     disposeObject(currentModel);
@@ -394,6 +401,7 @@ async function parseFiles(files) {
     try {
       const gltf = await loader.parseAsync(main.data, '');
       const root = gltf.scene || gltf.scenes[0];
+      root.animations = gltf.animations || []; // vorhandene Animationen behalten
       return root;
     } finally {
       // Texturen sind nach dem Parsen geladen
@@ -492,6 +500,139 @@ $('#url-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const v = $('#url-input').value.trim();
   if (v) { $('#url-input').blur(); openUrl(v); }
+});
+
+// ---------------------------------------------------------------------------
+// Animation: automatische Bein-Erkennung, Laufen & Idle
+// ---------------------------------------------------------------------------
+const anim = { result: null, mixer: null, action: null, mode: 'off', speed: 1, busy: false };
+
+function resetAnimation() {
+  if (anim.mixer) { anim.mixer.stopAllAction(); anim.mixer.uncacheRoot(anim.mixer.getRoot()); }
+  if (anim.result?.restore) anim.result.restore();
+  Object.assign(anim, { result: null, mixer: null, action: null, mode: 'off', busy: false });
+  renderAnimPanel();
+}
+
+async function ensureAnalysis() {
+  if (anim.result || anim.busy || !currentModel) return anim.result;
+  anim.busy = true;
+  renderAnimPanel();
+  await new Promise((r) => setTimeout(r, 40)); // Anzeige „Analysiere…“ zuerst zeichnen
+  const model = currentModel;
+  let res;
+  try {
+    res = analyzeModel(model, {
+      onReplaceMesh: (oldMesh, newMesh) => { if (origMaterials.has(oldMesh)) origMaterials.set(newMesh, origMaterials.get(oldMesh)); },
+    });
+  } catch (err) {
+    console.error(err);
+    res = { ok: false, reason: `Analyse fehlgeschlagen: ${err.message || err}` };
+  }
+  if (model !== currentModel) return null; // inzwischen anderes Modell geladen
+  anim.result = res;
+  anim.busy = false;
+  applyWireframe();
+  renderAnimPanel();
+  requestRender();
+  return res;
+}
+
+function playAnimation(id) {
+  const res = anim.result;
+  if (id === 'off' || !res?.ok) {
+    const mixer = anim.mixer;
+    if (anim.action) anim.action.fadeOut(0.25);
+    anim.action = null;
+    anim.mode = mixer ? 'fading' : 'off'; // kurz weiterrechnen, damit das Ausblenden sichtbar ist
+    if (mixer) {
+      setTimeout(() => {
+        if (anim.mode !== 'fading' || anim.mixer !== mixer) return;
+        mixer.stopAllAction();
+        if (anim.result?.restore) anim.result.restore();
+        anim.mode = 'off';
+        renderAnimPanel();
+        requestRender();
+      }, 280);
+    }
+    renderAnimPanel();
+    return;
+  }
+  const entry = res.clips.find((c) => c.id === id);
+  if (!entry) return;
+  if (!anim.mixer) anim.mixer = new THREE.AnimationMixer(currentModel);
+  const action = anim.mixer.clipAction(entry.clip);
+  action.setLoop(THREE.LoopRepeat, Infinity);
+  if (anim.action && anim.action !== action) {
+    action.reset().play();
+    anim.action.crossFadeTo(action, 0.35, false);
+  } else if (anim.action !== action) {
+    action.reset().fadeIn(0.25).play();
+  }
+  anim.action = action;
+  anim.mode = id;
+  anim.mixer.timeScale = anim.speed;
+  renderAnimPanel();
+  requestRender();
+}
+
+function renderAnimPanel() {
+  const status = $('#anim-status');
+  if (!status) return;
+  const res = anim.result;
+  const modes = $('#anim-mode');
+  const fileBox = $('#anim-file');
+  fileBox.innerHTML = '';
+  let canPlay = false;
+  if (anim.busy) {
+    status.className = 'anim-status busy';
+    status.innerHTML = '<div class="spinner"></div><div><b>Analysiere Modell…</b><br><small>Suche nach Beinen und Gelenken</small></div>';
+  } else if (!res) {
+    status.className = 'anim-status';
+    status.innerHTML = '<div class="ico">🔍</div><div><b>Noch nicht analysiert</b><br><small>Wähle „Idle“ oder „Laufen“ – die Beine werden automatisch erkannt.</small></div>';
+    canPlay = true;
+  } else if (res.ok) {
+    status.className = 'anim-status ok';
+    const legs = res.legs ? `${res.legs} Beine erkannt` : 'Animationen gefunden';
+    const info = [res.method, res.gait].filter(Boolean).join(' · ');
+    status.innerHTML = `<div class="ico">✓</div><div><b></b><br><small></small></div>`;
+    status.querySelector('b').textContent = legs;
+    status.querySelector('small').textContent = info;
+    canPlay = true;
+    for (const c of res.clips.filter((x) => x.fromFile)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'chip';
+      b.setAttribute('aria-pressed', String(anim.mode === c.id));
+      b.textContent = `▶ ${c.name}`;
+      b.addEventListener('click', () => playAnimation(anim.mode === c.id ? 'off' : c.id));
+      fileBox.appendChild(b);
+    }
+  } else {
+    status.className = 'anim-status fail';
+    status.innerHTML = '<div class="ico">✕</div><div><b>Keine Beine erkannt</b><br><small></small></div>';
+    status.querySelector('small').textContent = res.reason && res.reason !== 'Keine Beine erkannt.' ? res.reason : 'Dieses Modell hat keine erkennbaren Beine, die den Boden berühren.';
+  }
+  fileBox.hidden = !fileBox.children.length;
+  const hasGen = !res || (res.ok && res.clips.some((c) => c.id === 'walk'));
+  modes.querySelectorAll('button').forEach((b) => {
+    const v = b.dataset.value;
+    b.disabled = anim.busy || (!canPlay && v !== 'off') || (v !== 'off' && !hasGen);
+    const cur = anim.mode === 'fading' ? 'off' : anim.mode;
+    b.setAttribute('aria-checked', String(v === cur || (v === 'off' && cur.startsWith('file:'))));
+  });
+}
+
+$('#anim-mode').querySelectorAll('button').forEach((b) => b.addEventListener('click', async () => {
+  const v = b.dataset.value;
+  if (v === 'off') { playAnimation('off'); return; }
+  const res = await ensureAnalysis();
+  if (res?.ok) playAnimation(v);
+}));
+$('#anim-speed').addEventListener('input', (e) => {
+  anim.speed = parseFloat(e.target.value);
+  $('#anim-speed-out').textContent = `${anim.speed.toFixed(2).replace('.', ',')}×`;
+  if (anim.mixer) anim.mixer.timeScale = anim.speed;
 });
 
 // ---------------------------------------------------------------------------
@@ -620,7 +761,7 @@ async function exportAs(format) {
   switch (format) {
     case 'glb': {
       const { GLTFExporter } = await import('three/addons/exporters/GLTFExporter.js');
-      const buf = await withExportTransform({}, (root) => new GLTFExporter().parseAsync(root, { binary: true, onlyVisible: true }));
+      const buf = await withExportTransform({}, (root) => new GLTFExporter().parseAsync(root, { binary: true, onlyVisible: true, animations: anim.result?.ok ? anim.result.clips.map((c) => c.clip) : [] }));
       return [{ blob: new Blob([buf], { type: 'model/gltf-binary' }), name: `${base}.glb` }];
     }
     case 'usdz': {
@@ -735,6 +876,7 @@ function openSheet(id) {
     requestAnimationFrame(() => setTimeout(renderThumbnails, 30));
   }
   if (id === 'panel-view') updateStats();
+  if (id === 'panel-anim') { renderAnimPanel(); ensureAnalysis(); }
 }
 function closeSheets() {
   $$('.sheet').forEach((s) => { s.hidden = true; });
@@ -871,4 +1013,4 @@ if (src) openUrl(src);
 if (!prefs.helpSeen) showHelp();
 
 // Für automatisierte Tests
-window.__studio = { renderer, scene, camera, controls, get model() { return currentModel; }, exportAs, loadBuiltin, openFiles };
+window.__studio = { renderer, scene, camera, controls, get model() { return currentModel; }, exportAs, loadBuiltin, openFiles, anim, ensureAnalysis, playAnimation };

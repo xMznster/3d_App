@@ -125,7 +125,7 @@ for (const prof of PROFILES) {
     });
   }, safe);
 
-  await page.goto(BASE, { waitUntil: 'load' });
+  await page.goto(BASE + '?demo=rocket', { waitUntil: 'load' }); // leichtes Modell: Software-Renderer im Test ist langsam
   await page.waitForFunction(() => window.__studio && window.__studio.model);
   await page.waitForTimeout(400);
   const slug = prof.name.replace(/\s+/g, '-');
@@ -187,7 +187,7 @@ for (const prof of PROFILES) {
   check(Math.abs(b.target[0]) < 0.02 && Math.abs(b.target[2]) < 0.02, `Doppeltippen setzt Ansicht nicht zurück (target ${b.target.map((v) => v.toFixed(2))})`);
 
   // Panels
-  for (const [panel, name] of [['panel-models', 'modelle'], ['panel-import', 'oeffnen'], ['panel-view', 'ansicht'], ['panel-export', 'sichern']]) {
+  for (const [panel, name] of [['panel-models', 'modelle'], ['panel-import', 'oeffnen'], ['panel-view', 'ansicht'], ['panel-anim', 'animation'], ['panel-export', 'sichern']]) {
     await page.tap(`.tool[data-panel="${panel}"]`);
     await page.waitForTimeout(450);
     await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
