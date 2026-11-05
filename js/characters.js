@@ -10,7 +10,7 @@ import { furTexture, softBlob } from './spider.js';
  * P: { hips, spine, chest, neck, head, jaw?, shoulder:[x,y,z], elbow, wrist, handEnd, hip:[x,y,z], knee, ankle, toe }
  * Arm-/Beinpositionen werden für die linke Seite (+X) angegeben und gespiegelt.
  */
-function humanoidSkeleton(rb, P) {
+export function humanoidSkeleton(rb, P) {
   const root = rb.bone('Root', V(0, 0, 0));
   const hips = rb.bone('Hips', P.hips, root);
   const spine = rb.bone('Spine', P.spine, hips);

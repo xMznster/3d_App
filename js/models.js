@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { createSpider } from './spider.js';
 import { createHuman, createAnimatronicBear, createTallOne } from './characters.js';
+import { createGhostWoman } from './ghost.js';
 
 const mat = (color, opts = {}) =>
   new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.1, ...opts });
@@ -168,6 +169,7 @@ export const BUILTIN_MODELS = [
   { id: 'human', name: 'Mensch', create: createHuman },
   { id: 'bear', name: 'Rostbär', create: createAnimatronicBear },
   { id: 'tall', name: 'Der Lange', create: createTallOne },
+  { id: 'ghost', name: 'Die Bleiche', create: createGhostWoman },
   { id: 'rocket', name: 'Rakete', create: rocket },
   { id: 'knot', name: 'Torusknoten', create: torusKnot },
   { id: 'house', name: 'Haus', create: house },

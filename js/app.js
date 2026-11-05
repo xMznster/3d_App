@@ -625,7 +625,7 @@ function renderAnimPanel() {
       b.addEventListener('click', () => playAnimation(anim.mode === c.id && !c.once ? 'off' : c.id));
       box.appendChild(b);
     };
-    const ICONS = { attack: '⚔️', web: '🕸️', threat: '😠', jump: '⤴️', look: '👀', dance: '💃', wave: '👋', scare: '😱', glitch: '⚡', appear: '👻', tendrils: '🦑', stare: '👁️' };
+    const ICONS = { attack: '⚔️', web: '🕸️', threat: '😠', jump: '⤴️', look: '👀', dance: '💃', wave: '👋', scare: '😱', glitch: '⚡', appear: '👻', tendrils: '🦑', stare: '👁️', scream: '🗣️', twist: '🌀' };
     for (const c of res.clips.filter((x) => x.once)) chip(c, actBox, ICONS[c.id] || '▶');
     for (const c of res.clips.filter((x) => x.fromFile)) chip(c, fileBox, '▶');
   } else {

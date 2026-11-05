@@ -86,6 +86,30 @@ export class RigBuilder {
     if (meshName) this.names.set(material, meshName);
     return g;
   }
+  /**
+   * Körperteil mit weichen Gewichten (mehrere Knochen pro Vertex, z. B. Kleid oder Haare).
+   * weights(pos: Vector3) → [[bone, gewicht], …]; die vier stärksten werden normalisiert übernommen.
+   */
+  addWeighted(geo, material, weights) {
+    for (const k of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv'].includes(k)) geo.deleteAttribute(k);
+    if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(geo.attributes.position.count * 2), 2));
+    const pos = geo.attributes.position, n = pos.count;
+    const idx = new Uint16Array(n * 4), w = new Float32Array(n * 4);
+    const v = new THREE.Vector3();
+    const index = new Map(this.bones.map((b, k) => [b, k]));
+    for (let i = 0; i < n; i++) {
+      v.fromBufferAttribute(pos, i);
+      const list = weights(v).filter(([b, x]) => b && x > 1e-4).sort((a, b) => b[1] - a[1]).slice(0, 4);
+      const sum = list.reduce((a, [, x]) => a + x, 0) || 1;
+      list.forEach(([b, x], k) => { idx[i * 4 + k] = index.get(b); w[i * 4 + k] = x / sum; });
+      if (!list.length) { idx[i * 4] = 0; w[i * 4] = 1; }
+    }
+    geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(idx, 4));
+    geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(w, 4));
+    if (!this.parts.has(material)) this.parts.set(material, []);
+    this.parts.get(material).push(geo);
+    return geo;
+  }
   finish(extra = []) {
     const root = this.bones[0];
     this.group.add(root);
