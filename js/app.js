@@ -114,13 +114,15 @@ controls.addEventListener('change', requestRender);
 // Doppeltippen → Ansicht zurücksetzen
 let lastTap = { t: 0, x: 0, y: 0 };
 let tapStart = null;
-let activePointers = 0;
+const activePointers = new Set();
 canvas.addEventListener('pointerdown', (e) => {
-  activePointers++;
-  tapStart = activePointers === 1 ? { t: performance.now(), x: e.clientX, y: e.clientY } : null;
+  // Ein neuer "primärer" Finger heißt: alle vorherigen Berührungen sind beendet
+  if (e.isPrimary) activePointers.clear();
+  activePointers.add(e.pointerId);
+  tapStart = activePointers.size === 1 ? { t: performance.now(), x: e.clientX, y: e.clientY } : null;
 });
 const endPointer = (e) => {
-  activePointers = Math.max(0, activePointers - 1);
+  activePointers.delete(e.pointerId);
   if (!tapStart || e.type === 'pointercancel') { tapStart = null; return; }
   const now = performance.now();
   const moved = Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y);

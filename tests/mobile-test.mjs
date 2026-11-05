@@ -170,11 +170,15 @@ for (const prof of PROFILES) {
   check(moved > 0.05, `2-Finger-Verschieben ohne Wirkung (${moved.toFixed(3)})`);
 
   // Doppeltippen → zurücksetzen
-  for (let i = 0; i < 2; i++) {
-    await touch(cdp, 'touchStart', [[cx, cy]]);
-    await touch(cdp, 'touchEnd', []);
-    await page.waitForTimeout(90);
-  }
+  // Taps direkt im Browser mit realistischem Timing auslösen (der Software-Renderer
+  // im Test ist zu langsam, um echte Touch-Events im 100-ms-Takt zu liefern)
+  await page.evaluate(async ([x, y]) => {
+    const c = document.querySelector('#scene');
+    const fire = (type) => c.dispatchEvent(new PointerEvent(type, { pointerId: 99, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, bubbles: true }));
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    fire('pointerdown'); await wait(60); fire('pointerup'); await wait(110);
+    fire('pointerdown'); await wait(60); fire('pointerup');
+  }, [cx, cy]);
   await page.waitForTimeout(900);
   b = await camState(page);
   check(Math.abs(b.target[0]) < 0.02 && Math.abs(b.target[2]) < 0.02, `Doppeltippen setzt Ansicht nicht zurück (target ${b.target.map((v) => v.toFixed(2))})`);
