@@ -87,6 +87,35 @@ d = await motion('idle', 1200);
 check(d > 0.001, `Idle bewegt sich (max. Δ ${d.toFixed(4)})`);
 await page.evaluate(() => window.__studio.playAnimation('off'));
 await page.waitForTimeout(500);
+// Aktionen der Spinne
+for (const id of ['attack', 'web', 'threat']) {
+  d = await motion(id, 900);
+  check(d > 0.01, `Aktion ${id} bewegt die Spinne (max. Δ ${d.toFixed(3)})`);
+}
+await page.evaluate(() => window.__studio.playAnimation('off'));
+await page.waitForTimeout(400);
+
+// Figuren mit humanoidem Skelett
+for (const [id, method, acts] of [
+  ['human', 'Menschen-Skelett', ['wave', 'jump', 'dance']],
+  ['bear', 'Animatronik-Skelett', ['scare', 'glitch', 'dance']],
+  ['tall', 'Schattenfigur-Skelett', ['appear', 'tendrils', 'stare']],
+]) {
+  console.log(`\n▶ Figur ${id}`);
+  await page.evaluate((id) => window.__studio.loadBuiltin(id), id);
+  const rr = await page.evaluate(() => window.__t.analyze());
+  check(rr.ok && rr.method === method && ['idle', 'walk', ...acts].every((a) => rr.clips.includes(a)), `${method}, Clips ${JSON.stringify(rr.clips)}`);
+  for (const a of ['walk', 'idle', ...acts]) {
+    d = await motion(a, 700);
+    check(d > 0.005, `${a} bewegt die Figur (max. Δ ${d.toFixed(3)})`);
+  }
+  await page.evaluate(() => window.__studio.playAnimation('off'));
+  await page.waitForTimeout(400);
+}
+// zurück zur Spinne für den Export-Test
+await page.evaluate(() => window.__studio.loadBuiltin('spider'));
+await page.evaluate(() => window.__t.analyze());
+
 const glbInfo = await page.evaluate(async () => {
   const [x] = await window.__studio.exportAs('glb');
   const buf = await x.blob.arrayBuffer();
@@ -95,7 +124,7 @@ const glbInfo = await page.evaluate(async () => {
   window.__glb = buf; // bleibt im Browser (nicht als Zahlenliste übertragen)
   return { size: buf.byteLength, anims: (j.animations || []).map((a) => a.name), skins: (j.skins || []).length };
 });
-check(glbInfo.anims.includes('Laufen') && glbInfo.anims.includes('Idle') && glbInfo.skins > 0, `GLB enthält Skelett + Animationen ${JSON.stringify(glbInfo.anims)} (${(glbInfo.size / 1e6).toFixed(1)} MB)`);
+check(['Laufen', 'Idle', 'Angriff', 'Netz spinnen', 'Drohen'].every((n) => glbInfo.anims.includes(n)) && glbInfo.skins > 0, `GLB enthält Skelett + Animationen ${JSON.stringify(glbInfo.anims)} (${(glbInfo.size / 1e6).toFixed(1)} MB)`);
 
 // Re-Import des exportierten GLB: Animationen aus der Datei werden erkannt
 await page.evaluate(async () => {

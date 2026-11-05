@@ -505,12 +505,12 @@ $('#url-form').addEventListener('submit', (e) => {
 // ---------------------------------------------------------------------------
 // Animation: automatische Bein-Erkennung, Laufen & Idle
 // ---------------------------------------------------------------------------
-const anim = { result: null, mixer: null, action: null, mode: 'off', speed: 1, busy: false };
+const anim = { result: null, mixer: null, action: null, mode: 'off', base: 'off', speed: 1, busy: false };
 
 function resetAnimation() {
   if (anim.mixer) { anim.mixer.stopAllAction(); anim.mixer.uncacheRoot(anim.mixer.getRoot()); }
   if (anim.result?.restore) anim.result.restore();
-  Object.assign(anim, { result: null, mixer: null, action: null, mode: 'off', busy: false });
+  Object.assign(anim, { result: null, mixer: null, action: null, mode: 'off', base: 'off', busy: false });
   renderAnimPanel();
 }
 
@@ -541,6 +541,7 @@ async function ensureAnalysis() {
 function playAnimation(id) {
   const res = anim.result;
   if (id === 'off' || !res?.ok) {
+    anim.base = 'off';
     const mixer = anim.mixer;
     if (anim.action) anim.action.fadeOut(0.25);
     anim.action = null;
@@ -560,9 +561,23 @@ function playAnimation(id) {
   }
   const entry = res.clips.find((c) => c.id === id);
   if (!entry) return;
-  if (!anim.mixer) anim.mixer = new THREE.AnimationMixer(currentModel);
+  if (!anim.mixer) {
+    anim.mixer = new THREE.AnimationMixer(currentModel);
+    // Einmalige Aktion fertig → zurück zur vorherigen Dauer-Animation (oder Idle)
+    anim.mixer.addEventListener('finished', (e) => {
+      if (e.action !== anim.action) return;
+      playAnimation(anim.base === 'off' ? 'idle' : anim.base);
+    });
+  }
   const action = anim.mixer.clipAction(entry.clip);
-  action.setLoop(THREE.LoopRepeat, Infinity);
+  if (entry.once) {
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
+    if (anim.action === action) action.reset();
+  } else {
+    action.setLoop(THREE.LoopRepeat, Infinity);
+    anim.base = id;
+  }
   if (anim.action && anim.action !== action) {
     action.reset().play();
     anim.action.crossFadeTo(action, 0.35, false);
@@ -582,7 +597,9 @@ function renderAnimPanel() {
   const res = anim.result;
   const modes = $('#anim-mode');
   const fileBox = $('#anim-file');
+  const actBox = $('#anim-actions');
   fileBox.innerHTML = '';
+  actBox.innerHTML = '';
   let canPlay = false;
   if (anim.busy) {
     status.className = 'anim-status busy';
@@ -599,26 +616,31 @@ function renderAnimPanel() {
     status.querySelector('b').textContent = legs;
     status.querySelector('small').textContent = info;
     canPlay = true;
-    for (const c of res.clips.filter((x) => x.fromFile)) {
+    const chip = (c, box, icon) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'chip';
       b.setAttribute('aria-pressed', String(anim.mode === c.id));
-      b.textContent = `▶ ${c.name}`;
-      b.addEventListener('click', () => playAnimation(anim.mode === c.id ? 'off' : c.id));
-      fileBox.appendChild(b);
-    }
+      b.textContent = `${icon} ${c.name}`;
+      b.addEventListener('click', () => playAnimation(anim.mode === c.id && !c.once ? 'off' : c.id));
+      box.appendChild(b);
+    };
+    const ICONS = { attack: '⚔️', web: '🕸️', threat: '😠', jump: '⤴️', look: '👀', dance: '💃', wave: '👋', scare: '😱', glitch: '⚡', appear: '👻', tendrils: '🦑', stare: '👁️' };
+    for (const c of res.clips.filter((x) => x.once)) chip(c, actBox, ICONS[c.id] || '▶');
+    for (const c of res.clips.filter((x) => x.fromFile)) chip(c, fileBox, '▶');
   } else {
     status.className = 'anim-status fail';
     status.innerHTML = '<div class="ico">✕</div><div><b>Keine Beine erkannt</b><br><small></small></div>';
     status.querySelector('small').textContent = res.reason && res.reason !== 'Keine Beine erkannt.' ? res.reason : 'Dieses Modell hat keine erkennbaren Beine, die den Boden berühren.';
   }
-  fileBox.hidden = !fileBox.children.length;
+  fileBox.hidden = $('#anim-file-h').hidden = !fileBox.children.length;
+  actBox.hidden = $('#anim-actions-h').hidden = !actBox.children.length;
   const hasGen = !res || (res.ok && res.clips.some((c) => c.id === 'walk'));
   modes.querySelectorAll('button').forEach((b) => {
     const v = b.dataset.value;
     b.disabled = anim.busy || (!canPlay && v !== 'off') || (v !== 'off' && !hasGen);
-    const cur = anim.mode === 'fading' ? 'off' : anim.mode;
+    const isOnce = res?.clips?.find((c) => c.id === anim.mode)?.once;
+    const cur = anim.mode === 'fading' ? 'off' : isOnce ? anim.base : anim.mode;
     b.setAttribute('aria-checked', String(v === cur || (v === 'off' && cur.startsWith('file:'))));
   });
 }
