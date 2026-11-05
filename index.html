@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <!-- viewport-fit=cover: Inhalt bis unter Dynamic Island / Home-Indikator, Abstände über env(safe-area-inset-*) -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>3D Studio</title>
+  <meta name="description" content="3D-Modelle direkt auf dem iPhone ansehen, drehen, zoomen und herunterladen.">
+  <meta name="theme-color" content="#0b0d12">
+  <meta name="color-scheme" content="dark">
+
+  <!-- Home-Bildschirm / Web-App (iOS) -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="3D Studio">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="manifest" href="manifest.webmanifest">
+
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="modulepreload" href="vendor/three/build/three.core.min.js">
+  <link rel="modulepreload" href="vendor/three/build/three.module.min.js">
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three/build/three.module.min.js",
+      "three/addons/": "./vendor/three/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <div id="viewport" aria-label="3D-Ansicht">
+      <canvas id="scene" aria-label="3D-Modell. Ein Finger: drehen. Zwei Finger: zoomen und verschieben. Doppeltippen: Ansicht zurücksetzen."></canvas>
+    </div>
+
+    <header id="topbar">
+      <div class="title">
+        <span class="brand">3D Studio</span>
+        <span id="model-name" class="model-name">–</span>
+      </div>
+      <button id="btn-reset" class="icon-btn" type="button" aria-label="Ansicht zurücksetzen">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4" /></svg>
+      </button>
+      <button id="btn-help" class="icon-btn" type="button" aria-label="Hilfe zur Bedienung">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17.2v.1"/></svg>
+      </button>
+    </header>
+
+    <nav id="toolbar" aria-label="Werkzeuge">
+      <button type="button" class="tool" data-panel="panel-models">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Zm0 0v18M4 7.5l8 4.5 8-4.5"/></svg>
+        <span>Modelle</span>
+      </button>
+      <button type="button" class="tool" data-panel="panel-import">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4M5 13v6h14v-6"/></svg>
+        <span>Öffnen</span>
+      </button>
+      <button type="button" class="tool" data-panel="panel-view">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span>Ansicht</span>
+      </button>
+      <button type="button" class="tool" data-panel="panel-export">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-4-4m4 4 4-4M5 17v4h14v-4"/></svg>
+        <span>Sichern</span>
+      </button>
+      <button type="button" class="tool" id="btn-ar" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M12 7l5 2.8v4.4L12 17l-5-2.8V9.8L12 7Z"/></svg>
+        <span>AR</span>
+      </button>
+    </nav>
+
+    <!-- Abdunkelung hinter offenen Panels -->
+    <div id="scrim" hidden></div>
+
+    <!-- Panel: Modell-Bibliothek -->
+    <section id="panel-models" class="sheet" role="dialog" aria-modal="true" aria-labelledby="h-models" hidden>
+      <div class="grabber" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <h2 id="h-models">Modelle</h2>
+        <button type="button" class="close" aria-label="Schließen">✕</button>
+      </div>
+      <div class="sheet-body">
+        <h3>Beispielmodelle</h3>
+        <div id="builtin-list" class="grid"></div>
+        <h3>Meine Modelle <small>(auf diesem iPhone gespeichert)</small></h3>
+        <ul id="saved-list" class="list"></ul>
+        <p id="saved-empty" class="muted">Noch keine eigenen Modelle. Öffne eine Datei über „Öffnen“ – sie wird hier offline gespeichert.</p>
+      </div>
+    </section>
+
+    <!-- Panel: Datei öffnen -->
+    <section id="panel-import" class="sheet" role="dialog" aria-modal="true" aria-labelledby="h-import" hidden>
+      <div class="grabber" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <h2 id="h-import">Modell öffnen</h2>
+        <button type="button" class="close" aria-label="Schließen">✕</button>
+      </div>
+      <div class="sheet-body">
+        <label class="big-btn" for="file-input">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z"/></svg>
+          Aus „Dateien“ / iCloud wählen
+        </label>
+        <!-- Kein accept-Filter: iOS graut sonst .stl/.obj/.glb teilweise aus. Prüfung erfolgt in JS. -->
+        <input id="file-input" type="file" multiple hidden>
+        <p class="muted">Unterstützt: <b>GLB</b>, <b>GLTF</b> (mit .bin &amp; Texturen – alle Dateien gemeinsam auswählen), <b>OBJ</b>, <b>STL</b>.</p>
+
+        <h3>Von Web-Adresse laden</h3>
+        <form id="url-form" class="row">
+          <input id="url-input" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…/modell.glb" aria-label="Modell-URL">
+          <button type="submit" class="btn">Laden</button>
+        </form>
+        <p class="muted">Der Server muss den Zugriff erlauben (CORS).</p>
+      </div>
+    </section>
+
+    <!-- Panel: Ansicht -->
+    <section id="panel-view" class="sheet" role="dialog" aria-modal="true" aria-labelledby="h-view" hidden>
+      <div class="grabber" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <h2 id="h-view">Ansicht</h2>
+        <button type="button" class="close" aria-label="Schließen">✕</button>
+      </div>
+      <div class="sheet-body">
+        <label class="toggle"><span>Automatisch drehen</span><input type="checkbox" id="opt-autorotate"><i></i></label>
+        <label class="toggle"><span>Drahtgitter</span><input type="checkbox" id="opt-wireframe"><i></i></label>
+        <label class="toggle"><span>Bodenschatten</span><input type="checkbox" id="opt-shadow" checked><i></i></label>
+        <label class="toggle"><span>Raster</span><input type="checkbox" id="opt-grid"><i></i></label>
+
+        <h3>Hintergrund</h3>
+        <div class="segmented" id="opt-bg" role="radiogroup" aria-label="Hintergrund">
+          <button type="button" role="radio" data-value="dark" aria-checked="true">Dunkel</button>
+          <button type="button" role="radio" data-value="studio" aria-checked="false">Studio</button>
+          <button type="button" role="radio" data-value="light" aria-checked="false">Hell</button>
+        </div>
+
+        <h3>Modellfarbe</h3>
+        <div class="swatches" id="opt-color" role="radiogroup" aria-label="Modellfarbe">
+          <button type="button" role="radio" data-value="" aria-checked="true" class="sw-orig" aria-label="Originalfarben">Orig.</button>
+          <button type="button" role="radio" data-value="#e8e8ea" aria-checked="false" style="--c:#e8e8ea" aria-label="Weiß"></button>
+          <button type="button" role="radio" data-value="#2b2d33" aria-checked="false" style="--c:#2b2d33" aria-label="Graphit"></button>
+          <button type="button" role="radio" data-value="#d9a441" aria-checked="false" style="--c:#d9a441" aria-label="Gold"></button>
+          <button type="button" role="radio" data-value="#e5484d" aria-checked="false" style="--c:#e5484d" aria-label="Rot"></button>
+          <button type="button" role="radio" data-value="#3e8ef7" aria-checked="false" style="--c:#3e8ef7" aria-label="Blau"></button>
+          <button type="button" role="radio" data-value="#30a46c" aria-checked="false" style="--c:#30a46c" aria-label="Grün"></button>
+        </div>
+
+        <h3>Darstellungsqualität</h3>
+        <div class="segmented" id="opt-quality" role="radiogroup" aria-label="Qualität">
+          <button type="button" role="radio" data-value="auto" aria-checked="true">Auto</button>
+          <button type="button" role="radio" data-value="high" aria-checked="false">Max (3×)</button>
+          <button type="button" role="radio" data-value="eco" aria-checked="false">Akku</button>
+        </div>
+        <p class="muted" id="stats"></p>
+      </div>
+    </section>
+
+    <!-- Panel: Export / Download -->
+    <section id="panel-export" class="sheet" role="dialog" aria-modal="true" aria-labelledby="h-export" hidden>
+      <div class="grabber" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <h2 id="h-export">Modell sichern</h2>
+        <button type="button" class="close" aria-label="Schließen">✕</button>
+      </div>
+      <div class="sheet-body">
+        <div class="grid formats">
+          <button type="button" class="fmt" data-format="glb"><b>GLB</b><span>Universell, mit Farben</span></button>
+          <button type="button" class="fmt" data-format="usdz"><b>USDZ</b><span>Apple / AR Quick Look</span></button>
+          <button type="button" class="fmt" data-format="stl"><b>STL</b><span>3D-Druck</span></button>
+          <button type="button" class="fmt" data-format="obj"><b>OBJ</b><span>Austauschformat</span></button>
+          <button type="button" class="fmt" data-format="png"><b>PNG</b><span>Bild der Ansicht</span></button>
+          <button type="button" class="fmt" data-format="original" id="fmt-original" hidden><b>Original</b><span>Importierte Datei</span></button>
+        </div>
+        <div id="save-ready" class="save-ready" hidden>
+          <p id="save-info"></p>
+          <div class="row">
+            <button type="button" class="btn primary" id="btn-share">In „Dateien“ sichern / Teilen</button>
+            <a class="btn" id="btn-download" download>Laden</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Hilfe / Gesten -->
+    <section id="help" class="overlay" role="dialog" aria-modal="true" aria-labelledby="h-help" hidden>
+      <div class="card">
+        <h2 id="h-help">Bedienung</h2>
+        <ul class="gestures">
+          <li><span class="g">☝️</span><div><b>1 Finger ziehen</b><br>Modell drehen</div></li>
+          <li><span class="g">🤏</span><div><b>2 Finger spreizen</b><br>Zoomen</div></li>
+          <li><span class="g">✌️</span><div><b>2 Finger ziehen</b><br>Verschieben</div></li>
+          <li><span class="g">👆👆</span><div><b>Doppeltippen</b><br>Ansicht zurücksetzen</div></li>
+        </ul>
+        <div id="install-hint" class="install" hidden>
+          <b>Als App installieren:</b> In Safari auf <span class="share-ico" aria-label="Teilen">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M8 7l4-4 4 4M6 11H5v10h14V11h-1"/></svg></span>
+          tippen und <b>„Zum Home-Bildschirm“</b> wählen. Danach funktioniert 3D Studio auch offline.
+        </div>
+        <button type="button" class="btn primary wide" id="help-close">Los geht’s</button>
+      </div>
+    </section>
+
+    <div id="loading" hidden><div class="spinner"></div><span id="loading-text">Lädt…</span></div>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <noscript><div class="nojs">Bitte JavaScript aktivieren.</div></noscript>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
