@@ -64,6 +64,9 @@ await page.evaluate(() => {
 const motion = async (mode, ms = 700) => {
   const a = await page.evaluate(() => window.__t.snapshot());
   await page.evaluate((m) => window.__studio.playAnimation(m), mode);
+  // warten, bis die Animation wirklich läuft (erste Bilder einer neuen Figur brauchen im
+  // Software-Renderer wegen der Shader-Übersetzung deutlich länger)
+  await page.waitForFunction(() => (window.__studio.anim.action?.time || 0) > 0.15, null, { timeout: 15000 }).catch(() => {});
   await page.waitForTimeout(ms);
   await page.evaluate(() => window.__studio.model.updateMatrixWorld(true));
   const b = await page.evaluate(() => window.__t.snapshot());
