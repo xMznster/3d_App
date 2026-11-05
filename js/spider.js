@@ -5,6 +5,7 @@
 //   8 Beine mit Coxa, Femur, Patella, Tibia, Metatarsus, Tarsus, Spinnwarzen
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { RIGS } from './rig-registry.js';
 
 // ---------------------------------------------------------------------------
 // Hilfen
@@ -292,8 +293,9 @@ function jointBall(p, r) {
 
 /** Sammelt Haare als dünne dreiseitige Pyramiden (sehr günstig zu rendern) */
 class HairBuilder {
-  constructor() { this.pos = []; this.col = []; }
-  add(p, dir, len, rad, shade) {
+  constructor() { this.pos = []; this.col = []; this.bone = []; }
+  add(p, dir, len, rad, shade, bone = 0) {
+    for (let k = 0; k < 9; k++) this.bone.push(bone);
     const d = dir.clone().normalize();
     const e1 = Math.abs(d.y) < 0.9 ? new THREE.Vector3().crossVectors(d, UP).normalize() : new THREE.Vector3(1, 0, 0);
     const e2 = new THREE.Vector3().crossVectors(d, e1);
@@ -313,12 +315,23 @@ class HairBuilder {
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
     g.computeVertexNormals();
+    setSkin(g, this.bone);
     return g;
   }
 }
 
+/** Skinning-Attribute setzen: jeder Vertex hängt fest (Gewicht 1) an genau einem Knochen */
+function setSkin(geo, bone) {
+  const n = geo.attributes.position.count;
+  const idx = new Uint16Array(n * 4), w = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) { idx[i * 4] = Array.isArray(bone) ? bone[i] : bone; w[i * 4] = 1; }
+  geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(idx, 4));
+  geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(w, 4));
+  return geo;
+}
+
 /** Haare auf einer Oberfläche verteilen, flach nach "flow" (Richtung) gekämmt */
-function hairOnSurface(hb, geo, count, rnd, { flow, len = [0.025, 0.05], rad = 0.0028, lift = 0.45, minY = -Infinity, shadeFn }) {
+function hairOnSurface(hb, geo, count, rnd, { flow, len = [0.025, 0.05], rad = 0.0028, lift = 0.45, minY = -Infinity, shadeFn, bone = 0 }) {
   const p = geo.attributes.position, n = geo.attributes.normal;
   const P = new THREE.Vector3(), N = new THREE.Vector3(), T = new THREE.Vector3();
   let placed = 0, guard = 0;
@@ -334,7 +347,7 @@ function hairOnSurface(hb, geo, count, rnd, { flow, len = [0.025, 0.05], rad = 0
     const dir = N.clone().multiplyScalar(lift + rnd() * 0.3).addScaledVector(T, 1)
       .add(V((rnd() - 0.5) * 0.35, (rnd() - 0.5) * 0.35, (rnd() - 0.5) * 0.35));
     const l = len[0] + rnd() * (len[1] - len[0]);
-    hb.add(P.clone().addScaledVector(N, -0.002), dir, l, rad, shadeFn ? shadeFn(P, rnd) : 1);
+    hb.add(P.clone().addScaledVector(N, -0.002), dir, l, rad, shadeFn ? shadeFn(P, rnd) : 1, bone);
     placed++;
   }
 }
@@ -363,10 +376,31 @@ export function createSpider() {
   const hairMat = new THREE.MeshStandardMaterial({ color: '#8f8068', vertexColors: true, roughness: 0.65, name: 'Haare' });
   const spineMat = new THREE.MeshStandardMaterial({ color: '#1f1812', roughness: 0.5, name: 'Borsten' });
 
-  const add = (geo, mat, name) => {
-    const m = new THREE.Mesh(geo, mat);
+  // --- Skelett: alle Knochen ohne Eigenrotation, Position relativ zum Elternknochen ---
+  const bones = [];
+  const boneWorld = new Map();
+  const makeBone = (name, world, parent) => {
+    const b = new THREE.Bone();
+    b.name = name;
+    b.position.copy(world).sub(parent ? boneWorld.get(parent) : V(0, 0, 0));
+    if (parent) parent.add(b);
+    boneWorld.set(b, world.clone());
+    bones.push(b);
+    return bones.length - 1;
+  };
+  const ROOT = makeBone('B_Wurzel', V(0, 0, 0), null);
+  const rootBone = bones[ROOT];
+  const BODY = makeBone('B_Vorderkoerper', V(0, 0.36, 0.22), rootBone);
+  const ABDO = makeBone('B_Hinterleib', V(0, 0.37, -0.06), bones[BODY]);
+  const CHEL = makeBone('B_Cheliceren', V(0, 0.3, 0.56), bones[BODY]);
+
+  const meshes = [];
+  const add = (geo, mat, name, bone) => {
+    if (bone !== undefined) setSkin(geo, bone);
+    const m = new THREE.SkinnedMesh(geo, mat);
     m.name = name; m.castShadow = true; m.receiveShadow = true;
     group.add(m);
+    meshes.push(m);
     return m;
   };
 
@@ -381,7 +415,7 @@ export function createSpider() {
   };
   const proGeo = ellipsoid(PRO_S, proDeform);
   proGeo.translate(PRO_C.x, PRO_C.y, PRO_C.z);
-  add(proGeo, prosomaMat, 'Vorderkörper');
+  add(proGeo, prosomaMat, 'Vorderkörper', BODY);
   const proSurface = (dir) => proDeform(dir.clone().normalize()).multiply(PRO_S).add(PRO_C);
 
   // --- Hinterleib (Opisthosoma) ---
@@ -397,10 +431,10 @@ export function createSpider() {
   const abdGeo = ellipsoid(ABD_S, abdDeform);
   abdGeo.rotateX(-0.12);
   abdGeo.translate(ABD_C.x, ABD_C.y, ABD_C.z);
-  add(abdGeo, abdomenMat, 'Hinterleib');
+  add(abdGeo, abdomenMat, 'Hinterleib', ABDO);
 
   // Taille (Pedicel)
-  add(limbSegment(V(0, 0.33, -0.1), V(0, 0.37, -0.02), 0.07, 0.07, 0), legMat, 'Taille');
+  add(limbSegment(V(0, 0.33, -0.1), V(0, 0.37, -0.02), 0.07, 0.07, 0), legMat, 'Taille', ABDO);
 
   // Spinnwarzen
   const spin = [];
@@ -410,7 +444,7 @@ export function createSpider() {
     g.translate(s * 0.022, 0.36, -1.04);
     spin.push(g);
   }
-  add(mergeGeometries(spin), chelMat, 'Spinnwarzen');
+  add(mergeGeometries(spin), chelMat, 'Spinnwarzen', ABDO);
 
   // --- Augen (Wolfsspinnen-Anordnung: 4 klein vorne, 2 sehr groß, 2 oben) ---
   const eyes = [];
@@ -428,7 +462,7 @@ export function createSpider() {
     eye(V(s * 0.1, 0.12, 0.99), 0.017);   // vordere Reihe innen
     eye(V(s * 0.3, 0.1, 0.95), 0.016);    // vordere Reihe außen
   }
-  add(mergeGeometries(eyes), eyeMat, 'Augen');
+  add(mergeGeometries(eyes), eyeMat, 'Augen', BODY);
 
   // --- Cheliceren mit Giftklauen ---
   const chel = [], fangs = [];
@@ -448,8 +482,8 @@ export function createSpider() {
     fangs.push(f);
   }
   const chelGeo = mergeGeometries(chel);
-  add(chelGeo, chelMat, 'Cheliceren');
-  add(mergeGeometries(fangs), fangMat, 'Giftklauen');
+  add(chelGeo, chelMat, 'Cheliceren', CHEL);
+  add(mergeGeometries(fangs), fangMat, 'Giftklauen', CHEL);
 
   // --- Beine ---
   const hairs = new HairBuilder();
@@ -465,12 +499,18 @@ export function createSpider() {
   ];
   const RADII = [0.05, 0.047, 0.041, 0.039, 0.032, 0.022, 0.015];
 
-  const buildLeg = (joints, radii, name, { bulges, spineSegs }) => {
+  const SEG_NAMES = ['Coxa', 'Trochanter', 'Femur', 'Patella', 'Tibia', 'Metatarsus', 'Tarsus'];
+  const buildLeg = (joints, radii, name, { bulges, spineSegs, boneName }) => {
     const parts = [];
+    const chain = [];
+    let parent = bones[BODY];
     for (let k = 0; k < joints.length - 1; k++) {
+      const bi = makeBone(`${boneName}_${SEG_NAMES[k] || k}`, joints[k], parent);
+      parent = bones[bi];
+      chain.push(parent);
       const a = joints[k], b = joints[k + 1];
-      parts.push(limbSegment(a, b, radii[k], radii[k + 1], bulges[k] ?? 0.08));
-      if (k > 0) parts.push(jointBall(a, radii[k] * 1.04));
+      parts.push(setSkin(limbSegment(a, b, radii[k], radii[k + 1], bulges[k] ?? 0.08), bi));
+      if (k > 0) parts.push(setSkin(jointBall(a, radii[k] * 1.04), bi));
 
       // Behaarung entlang des Glieds (zur Spitze hin gekämmt)
       const dir = b.clone().sub(a);
@@ -487,7 +527,7 @@ export function createSpider() {
         const p = a.clone().addScaledVector(dir, t * len).addScaledVector(radial, r * 0.96);
         const hd = radial.clone().multiplyScalar(0.3 + rnd() * 0.25).addScaledVector(dir, 1)
           .add(V((rnd() - 0.5) * 0.3, (rnd() - 0.5) * 0.3, (rnd() - 0.5) * 0.3));
-        hairs.add(p, hd, 0.016 + rnd() * 0.028, 0.0019, shade(rnd));
+        hairs.add(p, hd, 0.016 + rnd() * 0.028, 0.0019, shade(rnd), bi);
       }
       // kräftige dunkle Borsten (Stacheln) an Femur, Tibia, Metatarsus
       if (spineSegs.includes(k)) {
@@ -498,12 +538,14 @@ export function createSpider() {
           const radial = e1.clone().multiplyScalar(Math.cos(ang)).addScaledVector(e2, Math.sin(ang) - 0.4).normalize();
           const r = THREE.MathUtils.lerp(radii[k], radii[k + 1], t);
           const p = a.clone().addScaledVector(dir, t * len).addScaledVector(radial, r * 0.9);
-          spines.add(p, radial.clone().multiplyScalar(0.8).addScaledVector(dir, 1.2), 0.045 + rnd() * 0.035, 0.0034, 1);
+          spines.add(p, radial.clone().multiplyScalar(0.8).addScaledVector(dir, 1.2), 0.045 + rnd() * 0.035, 0.0034, 1, bi);
         }
       }
     }
-    return add(mergeGeometries(parts), legMat, name);
+    add(mergeGeometries(parts), legMat, name);
+    return chain;
   };
+  const rig = { type: 'arachnid', root: rootBone, legs: [], palps: [] };
 
   const deg = THREE.MathUtils.degToRad;
   LEGS.forEach((L, i) => {
@@ -528,10 +570,12 @@ export function createSpider() {
       step(tars, deg(-12));                            // Tarsus
       const radii = RADII.map((r) => r * scale);
       radii.splice(1, 0, radii[0]); // Trochanter
-      buildLeg(pts, radii, `Bein ${s > 0 ? 'R' : 'L'}${i + 1}`, {
+      const chain = buildLeg(pts, radii, `Bein ${s > 0 ? 'R' : 'L'}${i + 1}`, {
         bulges: [0.05, 0.05, 0.14, 0.1, 0.1, 0.05, 0.04, 0.03],
         spineSegs: [2, 4, 5],
+        boneName: `Bein_${s > 0 ? 'R' : 'L'}${i + 1}`,
       });
+      rig.legs.push({ bones: chain, side: s, index: i, dir: d.clone(), lateral: new THREE.Vector3().crossVectors(d, UP).normalize() });
     }
   });
 
@@ -547,29 +591,44 @@ export function createSpider() {
     step(0.07, deg(0));
     step(0.1, deg(-45));
     step(0.11, deg(-75));
-    buildLeg(pts, [0.03, 0.028, 0.026, 0.025, 0.026, 0.03, 0.02], `Taster ${s > 0 ? 'R' : 'L'}`, {
+    const chain = buildLeg(pts, [0.03, 0.028, 0.026, 0.025, 0.026, 0.03, 0.02], `Taster ${s > 0 ? 'R' : 'L'}`, {
       bulges: [0.05, 0.1, 0.05, 0.08, 0.25],
       spineSegs: [],
+      boneName: `Taster_${s > 0 ? 'R' : 'L'}`,
     });
+    rig.palps.push({ bones: chain, side: s, lateral: new THREE.Vector3().crossVectors(d, UP).normalize() });
   }
 
   // --- Körperbehaarung ---
   const backFlow = V(0, -0.15, -1);
   hairOnSurface(hairs, abdGeo, 3800, rnd, {
-    flow: backFlow, len: [0.022, 0.048], lift: 0.22,
+    bone: ABDO, flow: backFlow, len: [0.022, 0.048], lift: 0.22,
     shadeFn: (P, r) => (r() < 0.28 ? 0.3 : 0.7 + r() * 0.45),
   });
   hairOnSurface(hairs, proGeo, 1500, rnd, {
-    flow: (P) => V(P.x * 0.6, 0.1, -1), len: [0.016, 0.034], lift: 0.2, minY: 0.2,
+    bone: BODY, flow: (P) => V(P.x * 0.6, 0.1, -1), len: [0.016, 0.034], lift: 0.2, minY: 0.2,
     shadeFn: (P, r) => (Math.abs(P.x) < 0.035 ? 1.1 : r() < 0.4 ? 0.3 : 0.7 + r() * 0.35),
   });
   hairOnSurface(hairs, chelGeo, 500, rnd, {
-    flow: V(0, -1, 0.3), len: [0.02, 0.045], lift: 0.5,
+    bone: CHEL, flow: V(0, -1, 0.3), len: [0.02, 0.045], lift: 0.5,
     shadeFn: (P, r) => (r() < 0.45 ? 1.15 : 0.35),
   });
 
   add(hairs.build(), hairMat, 'Behaarung');
   add(spines.build(), spineMat, 'Borsten');
 
+  // Skelett anbinden
+  group.add(rootBone);
+  group.updateMatrixWorld(true);
+  const skeleton = new THREE.Skeleton(bones);
+  for (const m of meshes) {
+    m.bind(skeleton);
+    m.computeBoundingBox();
+    m.computeBoundingSphere();
+  }
+  rig.body = bones[BODY];
+  rig.abdomen = bones[ABDO];
+  rig.chelicerae = bones[CHEL];
+  RIGS.set(group, rig);
   return group;
 }
