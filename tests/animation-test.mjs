@@ -92,14 +92,15 @@ const glbInfo = await page.evaluate(async () => {
   const buf = await x.blob.arrayBuffer();
   const len = new DataView(buf).getUint32(12, true);
   const j = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 20, len)));
-  return { size: buf.byteLength, anims: (j.animations || []).map((a) => a.name), skins: (j.skins || []).length, data: Array.from(new Uint8Array(buf)) };
+  window.__glb = buf; // bleibt im Browser (nicht als Zahlenliste übertragen)
+  return { size: buf.byteLength, anims: (j.animations || []).map((a) => a.name), skins: (j.skins || []).length };
 });
 check(glbInfo.anims.includes('Laufen') && glbInfo.anims.includes('Idle') && glbInfo.skins > 0, `GLB enthält Skelett + Animationen ${JSON.stringify(glbInfo.anims)} (${(glbInfo.size / 1e6).toFixed(1)} MB)`);
 
 // Re-Import des exportierten GLB: Animationen aus der Datei werden erkannt
-await page.evaluate(async (bytes) => {
-  await window.__studio.openFiles([{ name: 'Spinne_animiert.glb', type: 'model/gltf-binary', data: new Uint8Array(bytes).buffer }], { save: false });
-}, glbInfo.data);
+await page.evaluate(async () => {
+  await window.__studio.openFiles([{ name: 'Spinne_animiert.glb', type: 'model/gltf-binary', data: window.__glb }], { save: false });
+});
 r = await page.evaluate(() => window.__t.analyze());
 check(r.ok && r.clips.some((c) => c.startsWith('file:')), `Re-Import: Animationen aus Datei gefunden (${JSON.stringify(r)})`);
 
