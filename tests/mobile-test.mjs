@@ -176,8 +176,11 @@ for (const prof of PROFILES) {
     const c = document.querySelector('#scene');
     const fire = (type) => c.dispatchEvent(new PointerEvent(type, { pointerId: 99, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, bubbles: true }));
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const { controls } = window.__studio;
+    controls.enabled = false; // synthetische Pointer kennt OrbitControls (setPointerCapture) nicht
     fire('pointerdown'); await wait(60); fire('pointerup'); await wait(110);
     fire('pointerdown'); await wait(60); fire('pointerup');
+    controls.enabled = true;
   }, [cx, cy]);
   await page.waitForTimeout(900);
   b = await camState(page);
