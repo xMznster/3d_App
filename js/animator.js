@@ -17,6 +17,23 @@ const frac = (x) => x - Math.floor(x);
 const smooth = (x) => x * x * (3 - 2 * x);
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
 
+/** Weiche Kurve durch Stützpunkte [[t, wert], …] */
+function key(t, pts) {
+  if (t <= pts[0][0]) return pts[0][1];
+  for (let i = 1; i < pts.length; i++) {
+    if (t <= pts[i][0]) {
+      const [t0, v0] = pts[i - 1], [t1, v1] = pts[i];
+      return v0 + (v1 - v0) * smooth((t - t0) / (t1 - t0));
+    }
+  }
+  return pts[pts.length - 1][1];
+}
+/** Deterministischer Pseudozufall 0..1 (gleiche Animation bei jedem Erzeugen) */
+function hash(n) {
+  const x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}
+
 // ---------------------------------------------------------------------------
 // Gelenke & Hilfen
 // ---------------------------------------------------------------------------
@@ -128,12 +145,14 @@ function analyzeArachnid(root, rig) {
   const legs = rig.legs.map((l) => ({ ...l, j: l.bones.map(joint) }));
   const palps = rig.palps.map((p) => ({ ...p, j: p.bones.map(joint) }));
   const body = joint(rig.body), abd = joint(rig.abdomen), chel = joint(rig.chelicerae);
-  const animated = [rig.body, rig.abdomen, rig.chelicerae, ...legs.flatMap((l) => [0, 2, 3, 4, 5].map((k) => l.bones[k])), ...palps.flatMap((p) => [p.bones[1], p.bones[3]])];
+  const animated = [rig.body, rig.abdomen, rig.chelicerae, rig.web, ...legs.flatMap((l) => [0, 2, 3, 4, 5].map((k) => l.bones[k])), ...palps.flatMap((p) => [p.bones[1], p.bones[3]])];
   ensureNames(root, animated);
   const restore = snapshot(animated);
   const bodyRestY = rig.body.position.y;
+  const bodyRestZ = rig.body.position.z;
   const tracks = [
     { node: rig.body, q: true, p: true }, { node: rig.abdomen, q: true, s: true }, { node: rig.chelicerae, q: true },
+    ...(rig.web ? [{ node: rig.web, s: true }] : []),
     ...legs.flatMap((l) => [0, 2, 3, 4, 5].map((k) => ({ node: l.bones[k], q: true }))),
     ...palps.flatMap((p) => [{ node: p.bones[1], q: true }, { node: p.bones[3], q: true }]),
   ];
@@ -188,11 +207,265 @@ function analyzeArachnid(root, rig) {
     }
   });
 
+  // --- Aktionen ---
+  const front = (l) => l.index === 0 ? 1 : l.index === 1 ? 0.65 : 0;
+  const attack = bakeClip('Angriff', 1.5, tracks, restore, (t) => {
+    const r = key(t, [[0, 0], [0.35, 1], [0.5, 0.3], [0.9, 0.2], [1.5, 0]]); // aufbäumen
+    const L = key(t, [[0, 0], [0.36, 0], [0.48, 1], [0.8, 1], [1.5, 0]]);     // zustoßen
+    rot(body, XAXIS, -0.32 * r + 0.1 * L);
+    rig.body.position.y = bodyRestY + 0.05 * r;
+    rig.body.position.z = bodyRestZ + 0.14 * L;
+    rot(abd, XAXIS, -0.1 * r);
+    rot(chel, XAXIS, -0.45 * r + 0.15 * L);
+    for (const l of legs) {
+      const f = front(l);
+      if (!f) continue;
+      rot(l.j[0], UP, -l.side * 0.25 * r * f);
+      rot(l.j[2], l.lateral, (0.95 * r - 0.35 * L) * f);
+      rot(l.j[4], l.lateral, -0.45 * r * f);
+    }
+    for (const p of palps) rot(p.j[1], p.lateral, 0.55 * r);
+  });
+
+  const web = bakeClip('Netz spinnen', 5, tracks, restore, (t) => {
+    const e = key(t, [[0, 0], [0.5, 1], [4.3, 1], [5, 0]]);
+    rot(abd, XAXIS, 0.45 * e);                                   // Hinterleib hoch
+    rot(abd, UP, 0.28 * e * Math.sin(TAU * 1.2 * t));            // Spinnwarzen hin und her
+    rot(body, XAXIS, 0.08 * e);
+    for (const l of legs) {
+      if (l.index !== 3) continue;                               // Hinterbeine ziehen den Faden
+      const v = Math.max(0, Math.sin(TAU * 1.2 * t + (l.side > 0 ? 0 : Math.PI)));
+      rot(l.j[0], UP, l.side * 0.28 * e * v);
+      rot(l.j[2], l.lateral, 0.4 * e * v);
+    }
+    if (rig.web) rig.web.scale.setScalar(Math.max(0.001, key(t, [[0, 0.001], [0.5, 0.001], [4, 1], [5, 1]])));
+  });
+
+  const threat = bakeClip('Drohen', 2.6, tracks, restore, (t) => {
+    const e = key(t, [[0, 0], [0.4, 1], [2.1, 1], [2.6, 0]]);
+    rot(body, XAXIS, -0.26 * e);
+    rot(body, UP, 0.12 * e * Math.sin(TAU * 1.5 * t));
+    rig.body.position.y = bodyRestY + 0.05 * e;
+    rot(chel, XAXIS, -0.35 * e);
+    for (const l of legs) {
+      const f = front(l);
+      if (!f) continue;
+      rot(l.j[0], UP, -l.side * 0.12 * e);
+      rot(l.j[2], l.lateral, 1.15 * e * f);
+      rot(l.j[4], l.lateral, -0.25 * e * f);
+      rot(l.j[5], l.lateral, 0.15 * e * Math.sin(TAU * 3 * t) * f);
+    }
+    for (const p of palps) rot(p.j[1], p.lateral, 0.65 * e);
+  });
+
   return {
     ok: true, method: 'Spinnen-Skelett', legs: legs.length, gait: 'Achtbeiner (Wechselgang)',
-    clips: [{ id: 'idle', name: 'Idle', clip: idle }, { id: 'walk', name: 'Laufen', clip: walk }],
+    clips: [
+      { id: 'idle', name: 'Idle', clip: idle }, { id: 'walk', name: 'Laufen', clip: walk },
+      { id: 'attack', name: 'Angriff', clip: attack, once: true },
+      { id: 'web', name: 'Netz spinnen', clip: web, once: true },
+      { id: 'threat', name: 'Drohen', clip: threat, once: true },
+    ],
     restore,
   };
+}
+
+// ---------------------------------------------------------------------------
+// 1b. Humanoide Figuren (Mensch, Rostbär, Der Lange)
+// ---------------------------------------------------------------------------
+const ZAXIS = new THREE.Vector3(0, 0, 1);
+
+function analyzeHumanoid(root, rig) {
+  root.updateMatrixWorld(true);
+  const flavor = rig.flavor;
+  const J = {};
+  for (const k of ['root', 'hips', 'spine', 'chest', 'neck', 'head', 'jaw']) if (rig[k]) J[k] = joint(rig[k]);
+  const sides = [
+    { s: 1, ph: 0, ...rig.L }, // links (+X)
+    { s: -1, ph: 0.5, ...rig.R },
+  ].map((X) => ({
+    s: X.s, ph: X.ph,
+    upper: joint(X.arm.upper), fore: joint(X.arm.fore), hand: joint(X.arm.hand),
+    up: joint(X.leg.up), low: joint(X.leg.low), foot: joint(X.leg.foot),
+  }));
+  const [Ls, Rs] = sides;
+  const tendrils = (rig.tendrils || []).map((t) => ({ ...t, j: t.bones.map(joint) }));
+  const nodes = [
+    ...Object.values(J).map((j) => j.node),
+    ...sides.flatMap((x) => [x.upper, x.fore, x.hand, x.up, x.low, x.foot].map((j) => j.node)),
+    ...tendrils.flatMap((t) => t.bones),
+  ];
+  ensureNames(root, nodes);
+  const restore = snapshot(nodes);
+  const tracks = nodes.map((node) => ({
+    node, q: true,
+    p: node === rig.root || node === rig.hips,
+    s: node === rig.root,
+  }));
+  const hipsRest = rig.hips.position.clone();
+  const rootRest = rig.root.position.clone();
+  const tendrilSway = (t, amp, speed) => tendrils.forEach((td, k) => td.j.forEach((j, i) => {
+    rot(j, td.lateral, amp * Math.sin(TAU * speed * t - i * 0.6 + k * 1.7));
+    rot(j, UP, amp * 0.7 * Math.sin(TAU * speed * 0.7 * t + i * 0.4 + k));
+  }));
+
+  // --- Laufen ---
+  const F = {
+    human: { T: 1.1, A: 0.42, arm: 0.35, bob: 0.022, lean: 0.04, q: 0 },
+    animatronic: { T: 1.4, A: 0.3, arm: 0.14, bob: 0.03, lean: 0.03, q: 18 },
+    shadow: { T: 1.8, A: 0.34, arm: 0.05, bob: 0.012, lean: 0.1, q: 0 },
+  }[flavor] || { T: 1.1, A: 0.42, arm: 0.35, bob: 0.022, lean: 0.04, q: 0 };
+  const walk = bakeClip('Laufen', F.T, tracks, restore, (t) => {
+    let g = t / F.T;
+    if (F.q) g = Math.floor(g * F.q) / F.q; // ruckartig wie eine alte Maschine
+    for (const x of sides) {
+      const { fwd, lift } = stepCurve(frac(g + x.ph), 0.6);
+      rot(x.up, XAXIS, -F.A * fwd - 0.03);
+      rot(x.low, XAXIS, 0.06 + 1.05 * lift);
+      rot(x.foot, XAXIS, -0.3 * lift);
+      rot(x.upper, ZAXIS, x.s * 0.07);
+      rot(x.upper, XAXIS, F.arm * fwd);
+      rot(x.fore, XAXIS, -0.2 - 0.6 * F.arm * Math.max(0, -fwd));
+    }
+    rig.hips.position.y = hipsRest.y + F.bob * Math.cos(2 * TAU * g);
+    rot(J.hips, UP, 0.08 * Math.sin(TAU * g));
+    rot(J.chest, UP, -0.12 * Math.sin(TAU * g));
+    rot(J.spine, XAXIS, F.lean);
+    rot(J.head, XAXIS, -F.lean * 0.5);
+    if (flavor === 'shadow') { rot(J.head, ZAXIS, 0.25); rot(J.neck, XAXIS, 0.1); tendrilSway(t, 0.12, 0.6); }
+    if (flavor === 'animatronic') { rot(J.jaw, XAXIS, Math.sin(TAU * 2 * g) > 0.6 ? 0.08 : 0); rot(J.head, ZAXIS, 0.05 * Math.sin(TAU * g)); }
+  });
+
+  // --- Idle ---
+  const idle = bakeClip('Idle', 4, tracks, restore, (t) => {
+    const w = TAU / 4;
+    rot(J.chest, XAXIS, -0.02 * Math.sin(2 * w * t));
+    rig.hips.position.x = hipsRest.x + 0.01 * Math.sin(w * t);
+    rot(J.hips, ZAXIS, 0.015 * Math.sin(w * t));
+    for (const x of sides) { rot(x.upper, ZAXIS, x.s * (0.07 + 0.015 * Math.sin(2 * w * t))); rot(x.fore, XAXIS, -0.12); }
+    if (flavor === 'human') rot(J.head, UP, key(t, [[0, 0], [0.8, 0.4], [1.8, 0.4], [2.6, -0.3], [3.4, -0.3], [4, 0]]));
+    if (flavor === 'animatronic') {
+      rot(J.spine, XAXIS, 0.06);
+      rot(J.head, UP, t > 1.5 && t < 2.7 ? 0.45 : 0);   // ruckartiger Blick
+      rot(J.head, ZAXIS, t > 2.0 && t < 2.7 ? -0.2 : 0);
+      rot(J.jaw, XAXIS, Math.sin(6 * w * t) > 0.7 ? 0.08 : 0);
+    }
+    if (flavor === 'shadow') { rot(J.head, ZAXIS, 0.2 + 0.12 * Math.sin(w * t)); rot(J.neck, XAXIS, 0.06); tendrilSway(t, 0.15, 0.5); }
+  });
+
+  const clips = [{ id: 'idle', name: 'Idle', clip: idle }, { id: 'walk', name: 'Laufen', clip: walk }];
+  const action = (id, name, dur, pose) => clips.push({ id, name, clip: bakeClip(name, dur, tracks, restore, pose), once: true });
+
+  if (flavor === 'human' || !flavor) {
+    action('wave', 'Winken', 2.6, (t) => {
+      const u = key(t, [[0, 0], [0.45, 1], [2.15, 1], [2.6, 0]]);
+      rot(Rs.upper, ZAXIS, -2.5 * u);
+      rot(Rs.fore, ZAXIS, u * (-0.25 + 0.4 * Math.sin(TAU * 2.2 * t)));
+      rot(J.head, ZAXIS, 0.1 * u);
+      rot(J.head, UP, -0.15 * u);
+      rot(J.chest, ZAXIS, 0.05 * u);
+      for (const x of sides) rot(x.upper, ZAXIS, x === Ls ? 0.07 : 0);
+    });
+    action('jump', 'Springen', 1.6, (t) => {
+      const c = key(t, [[0, 0], [0.35, 1], [0.47, 0], [0.95, 0], [1.1, 0.7], [1.6, 0]]);
+      const air = t > 0.45 && t < 1.0 ? Math.sin(Math.PI * (t - 0.45) / 0.55) : 0;
+      rig.root.position.y = rootRest.y + 0.38 * air;
+      rig.hips.position.y = hipsRest.y - 0.17 * c;
+      for (const x of sides) {
+        rot(x.up, XAXIS, -0.9 * c - 0.5 * air);
+        rot(x.low, XAXIS, 1.7 * c + 0.9 * air);
+        rot(x.foot, XAXIS, -0.75 * c);
+        rot(x.upper, XAXIS, 0.7 * c - 2.4 * air);
+      }
+      rot(J.spine, XAXIS, 0.35 * c);
+      rot(J.head, XAXIS, -0.2 * c);
+    });
+    action('dance', 'Tanzen', 4, (t) => {
+      const e = key(t, [[0, 0], [0.3, 1], [3.7, 1], [4, 0]]);
+      const b = TAU * 2 * t;
+      rig.hips.position.x = hipsRest.x + 0.06 * e * Math.sin(b / 2);
+      rig.hips.position.y = hipsRest.y - 0.03 * e * (0.5 + 0.5 * Math.cos(b));
+      rot(J.hips, ZAXIS, 0.1 * e * Math.sin(b / 2));
+      rot(J.chest, ZAXIS, -0.08 * e * Math.sin(b / 2));
+      rot(J.head, XAXIS, 0.12 * e * Math.sin(b));
+      for (const x of sides) {
+        const v = Math.max(0, Math.sin(b / 2 + (x.s > 0 ? 0 : Math.PI))) * e;
+        rot(x.up, XAXIS, -0.2 * v);
+        rot(x.low, XAXIS, 0.4 * v);
+        rot(x.upper, ZAXIS, x.s * e * (1.3 + 0.6 * Math.sin(b / 2 + (x.s > 0 ? 0 : Math.PI))));
+        rot(x.fore, ZAXIS, x.s * 0.5 * e * Math.sin(b));
+      }
+    });
+  }
+
+  if (flavor === 'animatronic') {
+    action('scare', 'Erschrecken', 1.8, (t) => {
+      const e = key(t, [[0, 0], [0.22, 1], [1.3, 1], [1.8, 0]]);
+      rig.root.position.z = rootRest.z + 0.25 * e;
+      rot(J.spine, XAXIS, 0.35 * e);
+      rot(J.chest, XAXIS, 0.15 * e);
+      rot(J.jaw, XAXIS, 0.75 * e);
+      rot(J.head, XAXIS, -0.25 * e);
+      rot(J.head, UP, 0.18 * e * Math.sin(TAU * 9 * t));
+      for (const x of sides) { rot(x.upper, XAXIS, -1.6 * e); rot(x.upper, ZAXIS, x.s * 0.3 * e); rot(x.fore, XAXIS, -0.5 * e); }
+    });
+    action('glitch', 'Defekt', 3, (t) => {
+      const e = key(t, [[0, 0], [0.2, 1], [2.7, 1], [3, 0]]);
+      const seg = Math.floor(t * 8);
+      const r = (k) => hash(seg * 7 + k);
+      rot(J.spine, XAXIS, 0.25 * e);
+      rot(J.head, UP, e * (r(1) > 0.45 ? (r(2) - 0.5) * 1.0 : 0));
+      rot(J.head, ZAXIS, e * (r(3) > 0.6 ? (r(4) - 0.5) * 0.6 : 0));
+      rot(J.jaw, XAXIS, e * r(5) * 0.5);
+      rot(Rs.upper, XAXIS, e * (r(6) > 0.6 ? -0.8 : 0));
+      rot(Ls.fore, XAXIS, e * (r(8) > 0.5 ? -0.5 : 0));
+    });
+    action('dance', 'Tanzen', 3.2, (t) => {
+      const e = key(t, [[0, 0], [0.2, 1], [3.0, 1], [3.2, 0]]);
+      const step = Math.floor(t * 3);
+      const sgn = step % 2 ? 1 : -1;
+      rot(J.hips, ZAXIS, 0.1 * e * sgn);
+      rot(J.head, ZAXIS, -0.2 * e * sgn);
+      rot(J.jaw, XAXIS, (step % 2 ? 0.3 : 0) * e);
+      for (const x of sides) rot(x.upper, XAXIS, -1.2 * e * ((step + (x.s > 0 ? 0 : 1)) % 2));
+    });
+  }
+
+  if (flavor === 'shadow') {
+    action('appear', 'Erscheinen', 2.6, (t) => {
+      const seg = Math.floor(t * 14);
+      const visible = t >= 1.8 || hash(seg) < (t / 1.8) * 0.8 + 0.15;
+      const sx = visible ? 1 : 0.04;
+      rig.root.scale.set(sx, 1, sx);
+      if (!visible) rig.root.position.x = rootRest.x + (hash(seg + 9) - 0.5) * 0.4;
+      rot(J.head, UP, visible ? 0 : (hash(seg + 3) - 0.5) * 0.5);
+    });
+    action('tendrils', 'Tentakel', 3.6, (t) => {
+      const e = key(t, [[0, 0], [0.6, 1], [3.0, 1], [3.6, 0]]);
+      tendrils.forEach((td, k) => {
+        rot(td.j[0], td.lateral, 0.9 * e);
+        td.j.forEach((j, i) => {
+          rot(j, td.lateral, 0.3 * e * Math.sin(TAU * 1.1 * t - i * 0.8 + k));
+          rot(j, UP, 0.2 * e * Math.sin(TAU * 0.7 * t + i * 0.5 + k * 1.3));
+        });
+      });
+      for (const x of sides) rot(x.upper, ZAXIS, x.s * 0.5 * e);
+      rot(J.head, ZAXIS, 0.3 * e);
+    });
+    action('stare', 'Anstarren', 3.6, (t) => {
+      const e = key(t, [[0, 0], [1.0, 1], [2.8, 1], [3.6, 0]]);
+      rig.root.position.z = rootRest.z + 0.12 * e;
+      rot(J.spine, XAXIS, 0.18 * e);
+      rot(J.chest, XAXIS, 0.12 * e);
+      rot(J.neck, XAXIS, 0.15 * e);
+      rot(J.head, ZAXIS, 0.55 * e);
+      for (const x of sides) { rot(x.upper, XAXIS, -0.5 * e); rot(x.fore, XAXIS, -0.3 * e); }
+      tendrilSway(t, 0.1 * e, 0.4);
+    });
+  }
+
+  const names = { human: 'Menschen-Skelett', animatronic: 'Animatronik-Skelett', shadow: 'Schattenfigur-Skelett' };
+  return { ok: true, method: names[flavor] || 'Humanoides Skelett', legs: 2, gait: 'Zweibeiner', clips, restore };
 }
 
 // ---------------------------------------------------------------------------
@@ -214,15 +487,19 @@ function buildGenericClips(root, legs, extra, method) {
   }
   const nodes = [
     ...legs.flatMap((l) => [l.upper?.node, l.knee?.node, l.liftNode?.node]),
-    extra.body?.node, ...(extra.arms || []).map((a) => a.j.node), ...(extra.spine || []).map((s) => s.node),
+    extra.body?.node, ...(extra.arms || []).map((a) => a.j.node), ...(extra.spine || []).map((s) => s.node), root,
   ].filter(Boolean);
   ensureNames(root, nodes);
   const restore = snapshot(nodes);
   const rest = new Map(nodes.map((n) => [n, n.position.clone()]));
   const tracks = [...new Set(nodes)].map((node) => ({
     node, q: true,
-    p: node === extra.body?.node || legs.some((l) => l.liftNode?.node === node),
+    p: node === extra.body?.node || node === root || legs.some((l) => l.liftNode?.node === node),
   }));
+  const H = modelBox(root).H;
+  const rootUp = localOffset(root, UP.clone().multiplyScalar(H));
+  const rootRest = root.position.clone();
+  const turnJ = joint(extra.body?.node || root);
   const biped = legs.length === 2;
   const A = biped ? 0.42 : legs.length === 4 ? 0.32 : 0.24;
   const duty = biped ? 0.58 : 0.62;
@@ -262,9 +539,43 @@ function buildGenericClips(root, legs, extra, method) {
     });
   });
 
+  // --- Aktionen für alle erkannten Modelle ---
+  const crouchLegs = (c) => legs.forEach((l) => {
+    if (l.splayed) rot(l.upper, l.lateral, -0.25 * c);
+    else { rot(l.upper, XAXIS, -0.45 * c); rot(l.knee, XAXIS, 0.9 * c); }
+  });
+  const jump = bakeClip('Springen', 1.5, tracks, restore, (t) => {
+    const c = key(t, [[0, 0], [0.35, 1], [0.47, 0], [0.95, 0], [1.1, 0.7], [1.5, 0]]);
+    const air = t > 0.45 && t < 1.0 ? Math.sin(Math.PI * (t - 0.45) / 0.55) : 0;
+    root.position.copy(rootRest).addScaledVector(rootUp, 0.3 * air - 0.05 * c);
+    crouchLegs(c);
+    legs.forEach((l) => { if (!l.splayed) { rot(l.upper, XAXIS, -0.3 * air); rot(l.knee, XAXIS, 0.6 * air); } else rot(l.upper, l.lateral, 0.3 * air); });
+    for (const a of extra.arms || []) rot(a.j, XAXIS, 0.6 * c - 1.6 * air);
+  });
+  const look = bakeClip('Umschauen', 3.2, tracks, restore, (t) => {
+    rot(turnJ, UP, key(t, [[0, 0], [0.7, 0.55], [1.4, 0.55], [2.2, -0.55], [2.7, -0.55], [3.2, 0]]));
+  });
+  const dance = bakeClip('Tanzen', 4, tracks, restore, (t) => {
+    const e = key(t, [[0, 0], [0.3, 1], [3.7, 1], [4, 0]]);
+    const b = TAU * 2 * t;
+    root.position.copy(rootRest).addScaledVector(rootUp, 0.05 * e * Math.abs(Math.sin(b / 2)));
+    rot(turnJ, UP, 0.3 * e * Math.sin(b / 4));
+    legs.forEach((l) => {
+      const v = Math.max(0, Math.sin(b / 2 + (l.phase || 0) * TAU)) * e;
+      if (l.splayed) rot(l.upper, l.lateral, 0.35 * v);
+      else { rot(l.upper, XAXIS, -0.3 * v); rot(l.knee, XAXIS, 0.6 * v); }
+    });
+    for (const a of extra.arms || []) rot(a.j, new THREE.Vector3(0, 0, 1), a.side * e * (1.2 + 0.5 * Math.sin(b / 2)));
+  });
+
   return {
     ok: true, method, legs: legs.length, gait,
-    clips: [{ id: 'idle', name: 'Idle', clip: idle }, { id: 'walk', name: 'Laufen', clip: walk }],
+    clips: [
+      { id: 'idle', name: 'Idle', clip: idle }, { id: 'walk', name: 'Laufen', clip: walk },
+      { id: 'jump', name: 'Springen', clip: jump, once: true },
+      { id: 'look', name: 'Umschauen', clip: look, once: true },
+      { id: 'dance', name: 'Tanzen', clip: dance, once: true },
+    ],
     restore,
   };
 }
@@ -590,6 +901,7 @@ export function analyzeModel(root, { onReplaceMesh } = {}) {
 
   const rig = RIGS.get(root);
   if (rig && rig.type === 'arachnid') return withFile(analyzeArachnid(root, rig));
+  if (rig && rig.type === 'humanoid') return withFile(analyzeHumanoid(root, rig));
 
   const bones = new Set();
   root.traverse((o) => { if (o.isSkinnedMesh && o.skeleton) o.skeleton.bones.forEach((b) => bones.add(b)); });

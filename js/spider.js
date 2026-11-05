@@ -10,7 +10,7 @@ import { RIGS } from './rig-registry.js';
 // ---------------------------------------------------------------------------
 // Hilfen
 // ---------------------------------------------------------------------------
-function mulberry32(seed) {
+export function mulberry32(seed) {
   return function () {
     seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
     let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
@@ -67,7 +67,7 @@ const STROKE_COLORS = [
  * 2. zehntausende Haarstriche direkt in den Pixelspeicher (schnell auf jedem Gerät)
  * 3. Normal-Map aus der Haar-Höhenkarte (Sobel)
  */
-function furTexture({ w, h, seed, base, palette, pattern, strokes, strokeLen, normalStrength = 2.4 }) {
+export function furTexture({ w, h, seed, base, palette, pattern, strokes, strokeLen, normalStrength = 2.4 }) {
   const rnd = mulberry32(seed);
   const lw = w / 4, lh = h / 4;
   const low = makeCanvas(lw, lh), lctx = low.getContext('2d');
@@ -151,7 +151,7 @@ function furTexture({ w, h, seed, base, palette, pattern, strokes, strokeLen, no
 }
 
 // Unregelmäßige, weiche Form (Fleck) aus vielen weichen Punkten
-function softBlob(ctx, x, y, rx, ry, color, rnd, n = 60) {
+export function softBlob(ctx, x, y, rx, ry, color, rnd, n = 60) {
   const spr = softSprite(color);
   for (let i = 0; i < n; i++) {
     const a = rnd() * Math.PI * 2, r = Math.sqrt(rnd());
@@ -629,6 +629,30 @@ export function createSpider() {
   rig.body = bones[BODY];
   rig.abdomen = bones[ABDO];
   rig.chelicerae = bones[CHEL];
+
+  // Spinnennetz (für die Aktion „Netz spinnen“, in Ruhe unsichtbar klein)
+  const web = [];
+  const SPOKES = 14, R = 0.7;
+  for (let k = 0; k < SPOKES; k++) {
+    const a = (k / SPOKES) * Math.PI * 2;
+    web.push(0, 0, 0, Math.cos(a) * R, Math.sin(a) * R, 0);
+  }
+  let prev = null;
+  for (let t = 0; t <= SPOKES * 8; t++) {
+    const a = (t / SPOKES) * Math.PI * 2;
+    const r = 0.06 + (R - 0.08) * (t / (SPOKES * 8));
+    const pnt = [Math.cos(a) * r, Math.sin(a) * r, 0];
+    if (prev) web.push(...prev, ...pnt);
+    prev = pnt;
+  }
+  const webGeo = new THREE.BufferGeometry();
+  webGeo.setAttribute('position', new THREE.Float32BufferAttribute(web, 3));
+  const webObj = new THREE.LineSegments(webGeo, new THREE.LineBasicMaterial({ color: '#e8eef2', transparent: true, opacity: 0.75, name: 'Netz' }));
+  webObj.name = 'Spinnennetz';
+  webObj.position.set(0, 0.62, -1.35);
+  webObj.scale.setScalar(0.001);
+  group.add(webObj);
+  rig.web = webObj;
   RIGS.set(group, rig);
   return group;
 }
